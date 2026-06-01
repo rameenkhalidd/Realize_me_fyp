@@ -1,0 +1,98 @@
+'use client';
+
+import {
+    createContext,
+    useCallback,
+    useContext,
+    useMemo,
+    useState,
+    type ReactNode,
+} from 'react';
+import type { Editor } from 'tldraw';
+
+import { useAuth } from '@/components/auth/AuthProvider';
+import { isFirebaseConfigured } from '@/lib/firebase/config';
+import { useDraftAutosave, type DraftSaveStatus } from '@/hooks/useDraftAutosave';
+
+type DesignerDraftContextValue = {
+    visible: boolean;
+    status: DraftSaveStatus;
+    lastSavedAt: Date | null;
+    saveDisabled: boolean;
+    saveDraft: () => Promise<void>;
+    registerEditor: (editor: Editor | null) => void;
+    setGenerateActive: (active: boolean) => void;
+};
+
+const DesignerDraftContext = createContext<DesignerDraftContextValue | null>(null);
+
+export function DesignerDraftProvider({ children }: { children: ReactNode }) {
+    const { user } = useAuth();
+    const [editor, setEditor] = useState<Editor | null>(null);
+    const [generateActive, setGenerateActive] = useState(false);
+
+    const draftsEnabled = isFirebaseConfigured() && !!user;
+    const { status, lastSavedAt, saveNow } = useDraftAutosave(editor, {
+        enabled: draftsEnabled,
+        user: user ?? null,
+    });
+
+    const registerEditor = useCallback((next: Editor | null) => {
+        setEditor(next);
+    }, []);
+
+    const saveDraft = useCallback(async () => {
+        if (!draftsEnabled) {
+            return;
+        }
+        const result = await saveNow();
+        if (!result.ok) {
+            return;
+        }
+        if (result.draft_id != null && user) {
+            try {
+                const token = await user.getIdToken();
+                await fetch('/api/realize/drafts/archive', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        Authorization: `Bearer ${token}`,
+                    },
+                    body: JSON.stringify({ draft_id: result.draft_id }),
+                });
+            } catch (e) {
+                console.warn('Mark draft saved failed:', e);
+            }
+        }
+    }, [draftsEnabled, saveNow, user]);
+
+    const value = useMemo(
+        () => ({
+            visible: draftsEnabled,
+            status,
+            lastSavedAt,
+            saveDisabled: generateActive || status === 'saving',
+            saveDraft,
+            registerEditor,
+            setGenerateActive: setGenerateActive,
+        }),
+        [draftsEnabled, status, lastSavedAt, generateActive, saveDraft, registerEditor]
+    );
+
+    return (
+        <DesignerDraftContext.Provider value={value}>{children}</DesignerDraftContext.Provider>
+    );
+}
+
+export function useDesignerDraft(): DesignerDraftContextValue {
+    const ctx = useContext(DesignerDraftContext);
+    if (!ctx) {
+        throw new Error('useDesignerDraft must be used within DesignerDraftProvider');
+    }
+    return ctx;
+}
+
+/** Optional hook for canvas when provider may be absent (should not happen on /designer). */
+export function useDesignerDraftOptional() {
+    return useContext(DesignerDraftContext);
+}

@@ -2,12 +2,20 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Save } from 'lucide-react';
 import { Editor, Tldraw, type TLStoreSnapshot } from 'tldraw';
 import 'tldraw/tldraw.css';
 
 import { useAuth } from '@/components/auth/AuthProvider';
-import { blobToBase64, exportCanvasToBlob, getEditorSnapshot, loadEditorSnapshot } from '@/lib/tldraw-utils';
+import {
+    blobToBase64,
+    exportCanvasToBlob,
+    exportColorHintsPngBlob,
+    exportSketchPngBlob,
+    getEditorSnapshot,
+    hasColorHintShapes,
+    hasOutlineShapes,
+    loadEditorSnapshot,
+} from '@/lib/tldraw-utils';
 import SynthesisPreviewModal from '@/components/designer/SynthesisPreviewModal';
 import {
     HISTORY_ID_STORAGE_KEY,
@@ -18,16 +26,20 @@ import { validateImageFileForCanvas } from '@/lib/image-import-limits';
 import { patchDesignerImageImportLimits } from '@/lib/tldraw-patch-image-imports';
 import { getFirebaseAuth } from '@/lib/firebase/client-app';
 import { isFirebaseConfigured } from '@/lib/firebase/config';
-import { useDraftAutosave } from '@/hooks/useDraftAutosave';
+import { useDesignerDraft } from '@/components/designer/DesignerDraftContext';
 
 import CustomToolbar from './CustomToolbar';
 import CustomStylePanel from './CustomStylePanel';
 import CanvasFileMenu from './CanvasFileMenu';
+import { DrawingModeProvider } from './DrawingModeContext';
 import { GenerateFlowProvider } from './GenerateFlowContext';
 
 const USE_MOCK_GENERATION = process.env.NEXT_PUBLIC_USE_MOCK_GENERATION === 'true';
 
 const EMPTY_CANVAS_TOAST_MESSAGE = 'Canvas is empty, Add a sketch to generate.';
+const NO_OUTLINE_TOAST_MESSAGE = 'Draw an outline first (Outline mode).';
+const NO_COLOR_HINTS_TOAST_MESSAGE =
+    'No color hints added — a default color will be applied.';
 
 const STORAGE_QUOTA_USER_MESSAGE =
     'This design is too large to generate an image. Try removing large image imports or simplifying the sketch.';
@@ -83,55 +95,26 @@ export default function DesignerCanvas() {
     const [generationError, setGenerationError] = useState<string | null>(null);
     const [elapsedSeconds, setElapsedSeconds] = useState(0);
     const [isDemoMode, setIsDemoMode] = useState(USE_MOCK_GENERATION);
-    const [pendingSketchBlob, setPendingSketchBlob] = useState<Blob | null>(null);
+    const [pendingGeneration, setPendingGeneration] = useState<{
+        sketchBlob: Blob;
+        colorHintsBlob: Blob;
+        previewBlob: Blob;
+    } | null>(null);
     const [canvasToast, setCanvasToast] = useState<string | null>(null);
     const [importToast, setImportToast] = useState<string | null>(null);
     const [storageQuotaError, setStorageQuotaError] = useState(false);
     const router = useRouter();
     const draftRecoveredRef = useRef(false);
+    const { registerEditor, setGenerateActive } = useDesignerDraft();
 
-    const draftsEnabled = isFirebaseConfigured() && !!user;
-    const { status: draftStatus, lastSavedAt, saveNow } = useDraftAutosave(editor, {
-        enabled: draftsEnabled,
-        user: user ?? null,
-    });
+    useEffect(() => {
+        registerEditor(editor);
+        return () => registerEditor(null);
+    }, [editor, registerEditor]);
 
-    const handleSaveDraft = useCallback(async () => {
-        if (!draftsEnabled) {
-            setCanvasToast('Sign in to save drafts.');
-            return;
-        }
-        const result = await saveNow();
-        if (!result.ok) {
-            if (result.reason === 'empty') {
-                setCanvasToast('Draw something on the canvas first.');
-            } else if (result.reason === 'disabled') {
-                setCanvasToast('Sign in to save drafts.');
-            } else {
-                setCanvasToast('Could not save draft. Check your connection and backend.');
-            }
-            return;
-        }
-        if (result.draft_id != null && user) {
-            try {
-                const token = await user.getIdToken();
-                const arch = await fetch('/api/realize/drafts/archive', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        Authorization: `Bearer ${token}`,
-                    },
-                    body: JSON.stringify({ draft_id: result.draft_id }),
-                });
-                if (!arch.ok) {
-                    console.warn('Mark draft saved failed:', await arch.text());
-                }
-            } catch (e) {
-                console.warn('Mark draft saved failed:', e);
-            }
-        }
-        setCanvasToast('Draft saved to My work.');
-    }, [draftsEnabled, saveNow, user]);
+    useEffect(() => {
+        setGenerateActive(isGenerating);
+    }, [isGenerating, setGenerateActive]);
 
     const notifyEmptyCanvas = useCallback(() => {
         setCanvasToast(EMPTY_CANVAS_TOAST_MESSAGE);
@@ -291,18 +274,23 @@ export default function DesignerCanvas() {
         };
     };
 
-    const startGeneration = async (blob: Blob) => {
+    const startGeneration = async (payload: {
+        sketchBlob: Blob;
+        colorHintsBlob: Blob;
+        previewBlob: Blob;
+    }) => {
+        const { sketchBlob, colorHintsBlob, previewBlob } = payload;
         setIsSynthesisPreviewOpen(true);
         setGenerationError(null);
         setStorageQuotaError(false);
         setElapsedSeconds(0);
         setIsGenerating(true);
-        setPendingSketchBlob(blob);
+        setPendingGeneration(payload);
 
         let shouldStopGenerating = true;
 
         try {
-            const sketchImage = await blobToBase64(blob);
+            const sketchImage = await blobToBase64(previewBlob);
             const startedAt = Date.now();
             let data: GenerateResponse;
 
@@ -312,7 +300,10 @@ export default function DesignerCanvas() {
             } else {
                 const idToken = await getBearerTokenForApi();
                 const formData = new FormData();
-                formData.append('file', blob, 'canvas.png');
+                formData.append('file', sketchBlob, 'sketch.png');
+                formData.append('sketch_file', sketchBlob, 'sketch.png');
+                formData.append('color_hints_file', colorHintsBlob, 'color_hints.png');
+                formData.append('preview_file', previewBlob, 'preview.png');
                 if (editor) {
                     formData.append('sketch_json', JSON.stringify(getEditorSnapshot(editor)));
                 }
@@ -403,17 +394,40 @@ export default function DesignerCanvas() {
     const handleGenerate = async () => {
         if (!editor || isGenerating) return;
 
-        const blob = await exportCanvasToBlob(editor);
-
-        if (!blob) {
+        const shapeCount = editor.getCurrentPageShapeIds().size;
+        if (shapeCount === 0) {
             setCanvasToast(EMPTY_CANVAS_TOAST_MESSAGE);
             return;
         }
 
-        await startGeneration(blob);
+        if (!hasOutlineShapes(editor)) {
+            setCanvasToast(NO_OUTLINE_TOAST_MESSAGE);
+            return;
+        }
+
+        const sketchBlob = await exportSketchPngBlob(editor);
+        if (!sketchBlob) {
+            setCanvasToast(NO_OUTLINE_TOAST_MESSAGE);
+            return;
+        }
+
+        const colorHintsBlob = await exportColorHintsPngBlob(editor);
+        if (!colorHintsBlob) {
+            setCanvasToast(EMPTY_CANVAS_TOAST_MESSAGE);
+            return;
+        }
+
+        if (!hasColorHintShapes(editor)) {
+            setCanvasToast(NO_COLOR_HINTS_TOAST_MESSAGE);
+        }
+
+        const previewBlob = (await exportCanvasToBlob(editor)) ?? sketchBlob;
+
+        await startGeneration({ sketchBlob, colorHintsBlob, previewBlob });
     };
 
     return (
+        <DrawingModeProvider>
         <GenerateFlowProvider value={generateFlowValue}>
             <div className="relative h-full w-full bg-white">
                 {canvasToast && (
@@ -450,7 +464,9 @@ export default function DesignerCanvas() {
                     <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10001 pointer-events-auto">
                         <div className="rounded-xl border border-purple-200 bg-white/95 px-4 py-3 shadow-lg backdrop-blur-sm">
                             <p className="text-xs font-semibold text-gray-800">Quick tip</p>
-                            <p className="mt-1 text-xs text-gray-600">Use the top-left controls for Import/Export, and the right panel for color, size, stroke, and opacity.</p>
+                            <p className="mt-1 text-xs text-gray-600">
+                                Use Outline mode for structure (black/grey), then Color hints for regions. Style panel: color, stroke, size, opacity.
+                            </p>
                             <button
                                 type="button"
                                 onClick={() => {
@@ -474,9 +490,9 @@ export default function DesignerCanvas() {
                     errorMessage={generationError}
                     errorIsDestructive={storageQuotaError}
                     onRetry={() => {
-                        if (!pendingSketchBlob || isGenerating) return;
+                        if (!pendingGeneration || isGenerating) return;
                         setStorageQuotaError(false);
-                        void startGeneration(pendingSketchBlob);
+                        void startGeneration(pendingGeneration);
                     }}
                     onCloseError={() => {
                         if (isGenerating) return;
@@ -499,32 +515,6 @@ export default function DesignerCanvas() {
                     <CanvasFileMenu />
                 </Tldraw>
 
-                {draftsEnabled ? (
-                    <div className="absolute bottom-3 left-1/2 z-10040 flex w-[min(calc(100vw-2rem),28rem)] -translate-x-1/2 flex-col items-stretch gap-2 sm:w-auto sm:min-w-[20rem] sm:flex-row sm:items-center sm:gap-3">
-                        <div
-                            className="rounded-lg border border-violet-200/80 bg-white/95 px-3 py-2 text-center text-xs text-slate-600 shadow-sm backdrop-blur-sm sm:text-left"
-                            aria-live="polite"
-                        >
-                            {draftStatus === 'saving'
-                                ? 'Saving draft…'
-                                : draftStatus === 'error'
-                                  ? 'Draft save failed (check backend / DB).'
-                                  : lastSavedAt
-                                    ? `Last saved ${lastSavedAt.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} · auto-save every 1 min`
-                                    : 'Draft auto-saves every minute while you draw.'}
-                        </div>
-                        <button
-                            type="button"
-                            onClick={() => void handleSaveDraft()}
-                            disabled={draftStatus === 'saving' || isGenerating}
-                            className="inline-flex items-center justify-center gap-2 rounded-lg border border-violet-300 bg-realize-gradient-fuchsia px-4 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-violet-500/15 transition-opacity hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                            <Save className="h-4 w-4 shrink-0" aria-hidden />
-                            Save draft
-                        </button>
-                    </div>
-                ) : null}
-
                 <button
                     id="realize-btn"
                     type="button"
@@ -536,5 +526,6 @@ export default function DesignerCanvas() {
                 </button>
             </div>
         </GenerateFlowProvider>
+        </DrawingModeProvider>
     );
 }

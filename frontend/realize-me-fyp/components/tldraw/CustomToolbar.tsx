@@ -168,7 +168,7 @@ export default function CustomToolbar() {
         <div
             className="
                 absolute bottom-6 left-1/2 -translate-x-1/2 z-[9999] pointer-events-auto
-                flex items-center gap-3 px-5 py-3
+                flex flex-nowrap items-center gap-3 px-5 py-3
                 rounded-2xl border-realize shadow-realize-xl
                 bg-white/80 backdrop-blur-2xl
             "
@@ -182,7 +182,7 @@ export default function CustomToolbar() {
                     <button
                         key={tool.id}
                         onClick={() => editor.setCurrentTool(tool.id)}
-                        className={`p-3 rounded-xl ${isActive ? activeBtn : inactiveBtn}`}
+                        className={`p-3 rounded-xl shrink-0 ${isActive ? activeBtn : inactiveBtn}`}
                         title={`Switch to ${tool.label} tool`}
                     >
                         <Icon size={20} />
@@ -218,7 +218,7 @@ export default function CustomToolbar() {
 
                 <button
                     onClick={() => setIsShapeMenuOpen((open) => !open)}
-                    className={`p-3 rounded-xl ${currentToolId === 'geo' || currentToolId === 'line' ? activeBtn : inactiveBtn}`}
+                    className={`shrink-0 p-3 rounded-xl ${currentToolId === 'geo' || currentToolId === 'line' ? activeBtn : inactiveBtn}`}
                     title="Choose shape tool"
                 >
                     <div className="flex items-center gap-1">
@@ -230,13 +230,13 @@ export default function CustomToolbar() {
             </div>
 
             {/* Divider */}
-            <div className="w-[1px] h-8 bg-realize mx-2" />
+            <div className="w-[1px] h-8 bg-realize mx-2 shrink-0" />
 
             {/* === History / Delete Actions === */}
             <button
                 onClick={() => editor.undo()}
                 disabled={!canUndo}
-                className={`p-3 rounded-xl ${inactiveBtn} ${disabledBtn}`}
+                className={`shrink-0 p-3 rounded-xl ${inactiveBtn} ${disabledBtn}`}
                 title="Undo last action (Ctrl/Cmd+Z)"
             >
                 <Undo2 size={20} />
@@ -245,7 +245,7 @@ export default function CustomToolbar() {
             <button
                 onClick={() => editor.redo()}
                 disabled={!canRedo}
-                className={`p-3 rounded-xl ${inactiveBtn} ${disabledBtn}`}
+                className={`shrink-0 p-3 rounded-xl ${inactiveBtn} ${disabledBtn}`}
                 title="Redo last action (Ctrl+Y or Cmd+Shift+Z)"
             >
                 <Redo2 size={20} />
@@ -254,7 +254,7 @@ export default function CustomToolbar() {
             <button
                 onClick={handleDeleteSelected}
                 disabled={!hasSelection}
-                className={`p-3 rounded-xl ${inactiveBtn} ${disabledBtn}`}
+                className={`shrink-0 p-3 rounded-xl ${inactiveBtn} ${disabledBtn}`}
                 title="Delete selected shapes"
             >
                 <Trash2 size={20} />
@@ -274,7 +274,7 @@ export default function CustomToolbar() {
                 title={generateTitle}
                 aria-disabled={generateInactive}
                 className={`
-                    relative px-7 py-3 rounded-xl font-raleway font-bold text-white
+                    relative shrink-0 px-7 py-3 rounded-xl font-raleway font-bold text-white
                     bg-gradient-to-r from-[#8B5CF6] via-[#D946EF] to-[#06B6D4]
                     shadow-realize-xl overflow-hidden flex items-center gap-2
                     transition-all duration-200

@@ -191,24 +191,44 @@ async def drafts_archive(
     return {"success": True, "message": "Draft archived"}
 
 
+async def _read_sketch_upload(
+    file: UploadFile,
+    sketch_file: UploadFile | None,
+) -> bytes:
+    """Prefer explicit sketch_file; fall back to legacy `file` field."""
+    upload = sketch_file if sketch_file is not None else file
+    raw = await upload.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="Sketch file is empty")
+    return raw
+
+
 @router.post("/generate")
 async def session_generate(
     uid: Annotated[str, Depends(require_firebase_uid)],
-    file: UploadFile = File(...),
+    file: UploadFile = File(..., description="Legacy sketch PNG (same as sketch_file)"),
+    sketch_file: UploadFile | None = File(None, description="Outline/structure PNG for ControlNet"),
+    color_hints_file: UploadFile | None = File(
+        None, description="Color-hint PNG for SAM/LAB (optional until pipeline wired)"
+    ),
     sketch_json: str | None = Form(None),
     session_id: str | None = Form(None),
 ):
     """
-    Run Scribbler generation, persist history (always), upload to Storage when possible.
+    Run generation on sketch PNG, persist history (always), upload to Storage when possible.
+    color_hints_file is accepted for the ControlNet+SAM+LAB pipeline (Aimen); Pix2Pix uses sketch only.
     Returns image_base64 for immediate UI plus storage URL and history_id.
     """
-    raw = await file.read()
-    try:
-        canvas = Image.open(io.BytesIO(raw))
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=400, detail=f"Invalid image file: {exc}") from exc
+    sketch_raw = await _read_sketch_upload(file, sketch_file)
+    if color_hints_file is not None:
+        await color_hints_file.read()
 
-    generated = generate_image_scribbler(canvas)
+    try:
+        canvas = Image.open(io.BytesIO(sketch_raw))
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"Invalid sketch image file: {exc}") from exc
+
+    generated = generate_image_pix2pix(canvas)
     buf = io.BytesIO()
     generated.save(buf, format="PNG")
     png_bytes = buf.getvalue()

@@ -2,9 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState, Suspense } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import Link from 'next/link';
 import { Info, Loader, ShoppingBag } from 'lucide-react';
-import { BrandLogo } from '@/components/BrandLogo';
 import { ResultsEntryBanner } from '@/components/designer/ResultsEntryBanner';
 import { INTERACTIVE_BUTTON_MOTION } from '@/lib/interactive-button-motion';
 import { HISTORY_ID_STORAGE_KEY, RESULTS_ENTRY_WELCOME_KEY } from '@/lib/results-entry';
@@ -258,20 +256,8 @@ function ResultsPageContent() {
     }
 
     return (
-        <div className="min-h-screen bg-realize text-realize font-roboto">
-            <header className="bg-white/80 backdrop-blur-sm border-b border-realize sticky top-0 z-10 px-6 py-4">
-                <div className="max-w-7xl mx-auto flex items-center justify-between">
-                    <div className="flex items-center">
-                        <BrandLogo theme="light" subtitle="Results" />
-                    </div>
-
-                    <Link href="/designer" className="text-sm text-gray-600 hover:text-gray-900 font-roboto">
-                        Return to canvas
-                    </Link>
-                </div>
-            </header>
-
-            <main className="max-w-7xl mx-auto px-6 py-8 md:py-10">
+        <div className="bg-realize text-realize font-roboto">
+            <main className="mx-auto max-w-7xl px-6 py-8 md:py-10">
                 <h1 className="sr-only">Design comparison</h1>
 
                 {showEntryWelcome && <ResultsEntryBanner onDismiss={dismissEntryWelcome} />}

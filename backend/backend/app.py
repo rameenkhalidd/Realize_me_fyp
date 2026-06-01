@@ -23,8 +23,8 @@ import io
 import os
 from dotenv import load_dotenv
 
-# Load environment variables from .env
-load_dotenv()
+# Load environment variables from .env (override stale shell PGPORT=5432 on Windows).
+load_dotenv(override=True)
 
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Query
@@ -237,7 +237,7 @@ async def full_pipeline(
 
         # Step 1 – generate
         print("\n── Step 1: Scribbler generation ────────────────────────────────")
-        generated = generate_image_scribbler(canvas)
+        generated = generate_image_pix2pix(canvas)
         img_b64   = _pil_to_b64(generated)
         print(f"✓ Generated  {generated.size}")
 

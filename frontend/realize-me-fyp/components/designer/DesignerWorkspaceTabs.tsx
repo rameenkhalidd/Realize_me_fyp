@@ -23,11 +23,21 @@ export function DesignerWorkspaceTabs() {
             className="inline-flex gap-1 rounded-xl bg-slate-100/90 p-1 ring-1 ring-slate-200/80"
             aria-label="Workspace sections"
         >
-            <Link href="/designer" className={tabCls(!onHistory)} scroll={false}>
+            <Link
+                href="/designer"
+                className={tabCls(!onHistory)}
+                scroll={false}
+                title="Draw garment sketches and run AI generation"
+            >
                 <LayoutGrid className="h-4 w-4 shrink-0" aria-hidden />
                 Design
             </Link>
-            <Link href="/designer/history" className={tabCls(onHistory)} scroll={false}>
+            <Link
+                href="/designer/history"
+                className={tabCls(onHistory)}
+                scroll={false}
+                title="View past generations and reopen saved sketches"
+            >
                 <History className="h-4 w-4 shrink-0" aria-hidden />
                 My work
             </Link>

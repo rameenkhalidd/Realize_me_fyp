@@ -9,7 +9,8 @@ services:
       POSTGRES_PASSWORD: my126403
       POSTGRES_DB: fyp_clothing_db
     ports:
-      - "5432:5432"
+      # Use 5433 on the host so FastAPI/psycopg2 does not hit a local Windows Postgres on 5432.
+      - "5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
 

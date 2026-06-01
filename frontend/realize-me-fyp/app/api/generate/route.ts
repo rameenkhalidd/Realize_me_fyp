@@ -9,8 +9,9 @@ function toDataUrl(bytes: ArrayBuffer, mimeType: string) {
 }
 
 type ParsedMultipart = {
-    file: File;
-    dataUrl: string;
+    sketchFile: File;
+    colorHintsFile: File | null;
+    previewDataUrl: string;
     sketch_json: string | null;
 };
 
@@ -19,24 +20,45 @@ type ParsedJson = {
     sketch_json: null;
 };
 
+function fileFromForm(formData: FormData, ...keys: string[]): File | null {
+    for (const key of keys) {
+        const value = formData.get(key);
+        if (value instanceof File && value.size > 0) {
+            return value;
+        }
+    }
+    return null;
+}
+
 async function parseSketchRequest(req: NextRequest): Promise<ParsedMultipart | ParsedJson | { error: string }> {
     const contentType = req.headers.get('content-type') || '';
 
     if (contentType.includes('multipart/form-data')) {
         const formData = await req.formData();
-        const file = formData.get('file');
         const sketchField = formData.get('sketch_json');
 
-        if (!(file instanceof File)) {
-            return { error: 'No file provided' } as const;
+        const sketchFile =
+            fileFromForm(formData, 'sketch_file', 'file') ??
+            (() => {
+                const legacy = formData.get('file');
+                return legacy instanceof File ? legacy : null;
+            })();
+
+        if (!sketchFile) {
+            return { error: 'No sketch file provided' } as const;
         }
 
-        const arrayBuffer = await file.arrayBuffer();
+        const colorHintsFile = fileFromForm(formData, 'color_hints_file');
+        const previewFile = fileFromForm(formData, 'preview_file');
+        const previewSource = previewFile ?? sketchFile;
+
         const sketch_json = typeof sketchField === 'string' ? sketchField : null;
+        const previewBuffer = await previewSource.arrayBuffer();
 
         return {
-            file,
-            dataUrl: toDataUrl(arrayBuffer, file.type || 'image/png'),
+            sketchFile,
+            colorHintsFile,
+            previewDataUrl: toDataUrl(previewBuffer, previewSource.type || 'image/png'),
             sketch_json,
         };
     }
@@ -53,9 +75,18 @@ async function parseSketchRequest(req: NextRequest): Promise<ParsedMultipart | P
     };
 }
 
-async function proxySessionGenerate(file: File, sketchJson: string | null, authHeader: string) {
+async function proxySessionGenerate(
+    sketchFile: File,
+    colorHintsFile: File | null,
+    sketchJson: string | null,
+    authHeader: string
+) {
     const backendForm = new FormData();
-    backendForm.append('file', file);
+    backendForm.append('file', sketchFile, sketchFile.name || 'sketch.png');
+    backendForm.append('sketch_file', sketchFile, sketchFile.name || 'sketch.png');
+    if (colorHintsFile) {
+        backendForm.append('color_hints_file', colorHintsFile, colorHintsFile.name || 'color_hints.png');
+    }
     if (sketchJson) {
         backendForm.append('sketch_json', sketchJson);
     }
@@ -69,9 +100,9 @@ async function proxySessionGenerate(file: File, sketchJson: string | null, authH
     });
 }
 
-async function proxyGeneration(file: File) {
+async function proxyGeneration(sketchFile: File) {
     const backendForm = new FormData();
-    backendForm.append('file', file);
+    backendForm.append('file', sketchFile, sketchFile.name || 'sketch.png');
 
     const response = await fetch(`${BACKEND_BASE_URL}/generate-image`, {
         method: 'POST',
@@ -142,11 +173,14 @@ export async function POST(req: NextRequest) {
         }
 
         const authHeader = req.headers.get('authorization') ?? '';
+        const previewDataUrl =
+            'previewDataUrl' in parsedRequest ? parsedRequest.previewDataUrl : parsedRequest.dataUrl;
 
-        if (BACKEND_BASE_URL && 'file' in parsedRequest && parsedRequest.file) {
+        if (BACKEND_BASE_URL && 'sketchFile' in parsedRequest && parsedRequest.sketchFile) {
             try {
                 const sessionRes = await proxySessionGenerate(
-                    parsedRequest.file,
+                    parsedRequest.sketchFile,
+                    parsedRequest.colorHintsFile,
                     parsedRequest.sketch_json,
                     authHeader
                 );
@@ -177,7 +211,7 @@ export async function POST(req: NextRequest) {
             }
 
             try {
-                const proxied = await proxyGeneration(parsedRequest.file);
+                const proxied = await proxyGeneration(parsedRequest.sketchFile);
                 const b64 =
                     typeof proxied.image_base64 === 'string' ? proxied.image_base64 : undefined;
                 const generatedImage =
@@ -221,10 +255,10 @@ export async function POST(req: NextRequest) {
         await new Promise((resolve) => setTimeout(resolve, 500));
 
         return NextResponse.json({
-            generatedImage: parsedRequest.dataUrl,
+            generatedImage: previewDataUrl,
             success: true,
             message: BACKEND_BASE_URL
-                ? 'We couldn’t complete the render on our servers just now, so your original sketch appears in both panels. You can still compare layout and continue your workflow.'
+                ? 'We couldn’t complete the full AI render on our servers just now. Your sketch (with color hints) is on the left; the right panel shows a temporary preview until ControlNet + color processing is connected.'
                 : 'Preview: your sketch is shown in both panels until the full render pipeline is connected.',
             mode: 'mock',
         });

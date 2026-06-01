@@ -4,8 +4,6 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { PenSquare } from 'lucide-react';
-import { BrandLogo } from '@/components/BrandLogo';
-import { DesignerWorkspaceTabs } from '@/components/designer/DesignerWorkspaceTabs';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { isFirebaseConfigured } from '@/lib/firebase/config';
 import { RECOVER_SKETCH_STORAGE_KEY } from '@/lib/results-entry';
@@ -96,23 +94,13 @@ export default function HistoryDetailPage() {
     };
 
     return (
-        <div className="min-h-screen bg-gradient-to-br from-purple-50 via-white to-blue-50 font-roboto">
-            <header className="border-b border-gray-200 bg-white/90 px-4 py-3 backdrop-blur sm:px-6 sm:py-4">
-                <div className="mx-auto flex max-w-5xl flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                    <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center sm:gap-6">
-                        <BrandLogo theme="light" subtitle={`Generation #${id}`} />
-                        <DesignerWorkspaceTabs />
-                    </div>
-                    <Link
-                        href="/designer/history"
-                        className={`shrink-0 text-sm font-medium text-violet-700 hover:underline ${INTERACTIVE_BUTTON_MOTION}`}
-                    >
-                        ← All generations
-                    </Link>
-                </div>
-            </header>
-
-            <main className="mx-auto max-w-5xl px-6 py-10">
+        <main className="mx-auto max-w-5xl flex-1 px-6 py-10">
+            <Link
+                href="/designer/history"
+                className={`mb-6 inline-block text-sm font-medium text-violet-700 hover:underline ${INTERACTIVE_BUTTON_MOTION}`}
+            >
+                ← All generations
+            </Link>
                 {err ? (
                     <p className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{err}</p>
                 ) : null}
@@ -188,7 +176,6 @@ export default function HistoryDetailPage() {
                 ) : !err ? (
                     <p className="text-slate-600">Loading…</p>
                 ) : null}
-            </main>
-        </div>
+        </main>
     );
 }

@@ -8,7 +8,7 @@ export type GenerateFlowContextValue = {
     notifyImportRejected: (message: string) => void;
 };
 
-const GenerateFlowContext = createContext<GenerateFlowContextValue | null>(null);
+export const GenerateFlowContext = createContext<GenerateFlowContextValue | null>(null);
 
 export function GenerateFlowProvider({
     children,
