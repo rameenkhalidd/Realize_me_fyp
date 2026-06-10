@@ -4,6 +4,7 @@ import { usePathname } from 'next/navigation';
 import { AlertCircle, CheckCircle2, Cloud, Loader2, Save } from 'lucide-react';
 
 import { useDesignerDraftOptional } from '@/components/designer/DesignerDraftContext';
+import { DRAFT_AUTOSAVE_ERROR_MESSAGE } from '@/hooks/useDraftAutosave';
 
 /** Draft status + save control for the designer header (design canvas route only). */
 export default function DesignerHeaderDraft() {
@@ -26,7 +27,7 @@ export default function DesignerHeaderDraft() {
         statusLine = 'Saving…';
     } else if (isError) {
         StatusIcon = AlertCircle;
-        statusLine = 'Save failed';
+        statusLine = 'Autosave failed — tap Save';
     } else if (lastSavedAt) {
         StatusIcon = CheckCircle2;
         statusLine = `Saved · ${lastSavedAt.toLocaleTimeString([], {
@@ -37,7 +38,11 @@ export default function DesignerHeaderDraft() {
 
     return (
         <div className="flex items-center gap-2 sm:gap-3">
-            <div className="hidden min-w-0 items-center gap-1.5 sm:flex" aria-live="polite">
+            <div
+                className={`min-w-0 items-center gap-1.5 flex ${isError ? '' : 'hidden sm:flex'}`}
+                aria-live="polite"
+                title={isError ? DRAFT_AUTOSAVE_ERROR_MESSAGE : undefined}
+            >
                 <StatusIcon
                     className={`h-3.5 w-3.5 shrink-0 ${
                         isSaving

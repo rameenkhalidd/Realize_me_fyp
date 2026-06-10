@@ -2,7 +2,10 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { FileImage, FileType2, FolderInput, Share2 } from 'lucide-react';
-import { useEditor, type TLFilesExternalContent } from 'tldraw';
+import { useEditor, useValue, type TLFilesExternalContent } from 'tldraw';
+
+import { EXPORT_PADDING, getExportBounds, getImagePlacementPoint } from '@/lib/tldraw-utils';
+import ClearCanvasAction from '@/components/tldraw/ClearCanvasAction';
 
 function downloadBlob(blob: Blob, filename: string) {
     const url = URL.createObjectURL(blob);
@@ -38,10 +41,11 @@ function getFilenameFromUser(defaultBaseName: string, extension: 'svg' | 'png') 
 async function exportSvgBlob(editor: ReturnType<typeof useEditor>, transparent: boolean) {
     const shapeIds = Array.from(editor.getCurrentPageShapeIds());
     if (shapeIds.length === 0) return null;
-    const bounds = editor.getSelectionRotatedPageBounds() || editor.getViewportPageBounds();
+    const bounds = getExportBounds(editor);
+    if (!bounds) return null;
     const svg = await editor.getSvgString(shapeIds, {
         bounds,
-        padding: 20,
+        padding: EXPORT_PADDING,
         background: !transparent,
     });
     if (!svg) return null;
@@ -51,10 +55,11 @@ async function exportSvgBlob(editor: ReturnType<typeof useEditor>, transparent: 
 async function exportPngBlob(editor: ReturnType<typeof useEditor>, transparent: boolean) {
     const shapeIds = Array.from(editor.getCurrentPageShapeIds());
     if (shapeIds.length === 0) return null;
-    const bounds = editor.getSelectionRotatedPageBounds() || editor.getViewportPageBounds();
+    const bounds = getExportBounds(editor);
+    if (!bounds) return null;
     const svg = await editor.getSvgString(shapeIds, {
         bounds,
-        padding: 20,
+        padding: EXPORT_PADDING,
         background: !transparent,
     });
     if (!svg) return null;
@@ -98,6 +103,11 @@ export default function CanvasFileMenu() {
     const [exportOpen, setExportOpen] = useState(false);
     const [transparent, setTransparent] = useState(false);
     const rootRef = useRef<HTMLDivElement | null>(null);
+    const hasCanvasShapes = useValue(
+        'has canvas shapes',
+        () => ((editor ? Array.from(editor.getCurrentPageShapeIds()).length : 0) > 0),
+        [editor]
+    );
 
     useEffect(() => {
         const onPointerDown = (event: MouseEvent) => {
@@ -128,7 +138,11 @@ export default function CanvasFileMenu() {
         input.onchange = async () => {
             const file = input.files?.[0];
             if (!file) return;
-            const content: TLFilesExternalContent = { type: 'files', files: [file] };
+            const content: TLFilesExternalContent = {
+                type: 'files',
+                files: [file],
+                point: getImagePlacementPoint(editor),
+            };
             await editor.putExternalContent(content);
         };
         input.click();
@@ -181,6 +195,11 @@ export default function CanvasFileMenu() {
                         <Share2 size={18} aria-hidden />
                         <span className="text-[10px] font-medium leading-none">Export</span>
                     </button>
+                    <ClearCanvasAction
+                        variant="menu"
+                        hasCanvasShapes={hasCanvasShapes}
+                        showDraftHint
+                    />
                 </div>
 
                 {exportOpen && (

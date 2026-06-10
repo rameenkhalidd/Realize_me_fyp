@@ -76,7 +76,8 @@ export default function DesignerHistoryListPage() {
     const canLoadMore = items.length < total;
 
     return (
-        <main className="mx-auto max-w-4xl flex-1 px-6 py-10">
+        <div className="min-h-0 flex-1 overflow-y-auto">
+        <main className="mx-auto max-w-4xl px-6 py-10">
             <h1 className="font-raleway text-2xl font-bold text-slate-800">Your generations</h1>
             <p className="mt-1 text-sm text-slate-600">
                 Renders and saved searches from your account ({total} total). Use the sidebar to return to{' '}
@@ -139,5 +140,6 @@ export default function DesignerHistoryListPage() {
                 </button>
             ) : null}
         </main>
+        </div>
     );
 }

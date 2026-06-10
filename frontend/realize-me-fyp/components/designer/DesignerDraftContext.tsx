@@ -18,8 +18,10 @@ type DesignerDraftContextValue = {
     visible: boolean;
     status: DraftSaveStatus;
     lastSavedAt: Date | null;
+    saveErrorMessage: string | null;
     saveDisabled: boolean;
     saveDraft: () => Promise<void>;
+    clearSaveError: () => void;
     registerEditor: (editor: Editor | null) => void;
     setGenerateActive: (active: boolean) => void;
 };
@@ -32,7 +34,7 @@ export function DesignerDraftProvider({ children }: { children: ReactNode }) {
     const [generateActive, setGenerateActive] = useState(false);
 
     const draftsEnabled = isFirebaseConfigured() && !!user;
-    const { status, lastSavedAt, saveNow } = useDraftAutosave(editor, {
+    const { status, lastSavedAt, saveErrorMessage, clearSaveError, saveNow } = useDraftAutosave(editor, {
         enabled: draftsEnabled,
         user: user ?? null,
     });
@@ -71,12 +73,14 @@ export function DesignerDraftProvider({ children }: { children: ReactNode }) {
             visible: draftsEnabled,
             status,
             lastSavedAt,
+            saveErrorMessage,
             saveDisabled: generateActive || status === 'saving',
             saveDraft,
+            clearSaveError,
             registerEditor,
             setGenerateActive: setGenerateActive,
         }),
-        [draftsEnabled, status, lastSavedAt, generateActive, saveDraft, registerEditor]
+        [draftsEnabled, status, lastSavedAt, saveErrorMessage, generateActive, saveDraft, clearSaveError, registerEditor]
     );
 
     return (

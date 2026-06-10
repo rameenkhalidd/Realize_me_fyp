@@ -1,6 +1,7 @@
 import type { Editor } from 'tldraw';
 
 import { validateImageFileForCanvas } from '@/lib/image-import-limits';
+import { getImagePlacementPoint } from '@/lib/tldraw-utils';
 
 type EditorWithExternalHandlers = Editor & {
     externalContentHandlers: Record<string, ((info: unknown) => unknown | Promise<unknown>) | null>;
@@ -12,7 +13,8 @@ export function patchDesignerImageImportLimits(editor: Editor, notifyImportRejec
     const prevFiles = handlers.files;
     if (prevFiles) {
         editor.registerExternalContentHandler('files', async (info) => {
-            const files = (info as { files: File[] }).files;
+            const payload = info as { files: File[]; point?: { x: number; y: number } };
+            const files = payload.files;
             for (const file of files) {
                 if (file.type.startsWith('image/')) {
                     const result = await validateImageFileForCanvas(file);
@@ -22,7 +24,10 @@ export function patchDesignerImageImportLimits(editor: Editor, notifyImportRejec
                     }
                 }
             }
-            return prevFiles(info);
+            return prevFiles({
+                ...payload,
+                point: payload.point ?? getImagePlacementPoint(editor),
+            });
         });
     }
     const prevReplace = handlers['file-replace'];

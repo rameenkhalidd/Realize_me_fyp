@@ -11,6 +11,7 @@ function toDataUrl(bytes: ArrayBuffer, mimeType: string) {
 type ParsedMultipart = {
     sketchFile: File;
     colorHintsFile: File | null;
+    previewFile: File | null;
     previewDataUrl: string;
     sketch_json: string | null;
 };
@@ -58,6 +59,7 @@ async function parseSketchRequest(req: NextRequest): Promise<ParsedMultipart | P
         return {
             sketchFile,
             colorHintsFile,
+            previewFile,
             previewDataUrl: toDataUrl(previewBuffer, previewSource.type || 'image/png'),
             sketch_json,
         };
@@ -78,6 +80,7 @@ async function parseSketchRequest(req: NextRequest): Promise<ParsedMultipart | P
 async function proxySessionGenerate(
     sketchFile: File,
     colorHintsFile: File | null,
+    previewFile: File | null,
     sketchJson: string | null,
     authHeader: string
 ) {
@@ -86,6 +89,9 @@ async function proxySessionGenerate(
     backendForm.append('sketch_file', sketchFile, sketchFile.name || 'sketch.png');
     if (colorHintsFile) {
         backendForm.append('color_hints_file', colorHintsFile, colorHintsFile.name || 'color_hints.png');
+    }
+    if (previewFile) {
+        backendForm.append('preview_file', previewFile, previewFile.name || 'preview.png');
     }
     if (sketchJson) {
         backendForm.append('sketch_json', sketchJson);
@@ -181,6 +187,7 @@ export async function POST(req: NextRequest) {
                 const sessionRes = await proxySessionGenerate(
                     parsedRequest.sketchFile,
                     parsedRequest.colorHintsFile,
+                    parsedRequest.previewFile,
                     parsedRequest.sketch_json,
                     authHeader
                 );

@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
     History,
-    LayoutGrid,
+    SquarePen,
     LogOut,
     PanelLeft,
     Save,
@@ -101,7 +101,7 @@ export default function DesignerRail({ onCloseSidebar }: DesignerRailProps) {
                 active={onDesign}
                 title="Design — Draw sketches and run AI generation"
             >
-                <LayoutGrid className="h-5 w-5" aria-hidden />
+                <SquarePen className="h-5 w-5" aria-hidden />
             </RailIconButton>
 
             <RailIconButton

@@ -19,7 +19,7 @@ from PIL import Image
 from pydantic import BaseModel, Field
 
 from firebase_auth_dep import require_firebase_uid
-from firebase_storage_upload import upload_generated_png
+from firebase_storage_upload import upload_generated_png, upload_sketch_preview_png
 from image_generation_local import generate_image_pix2pix
 from realize_db import get_connection, json_param
 
@@ -59,13 +59,39 @@ def _sketch_dict_from_form(sketch_json: str | None) -> dict[str, Any]:
         return {}
 
 
+def _png_bytes_to_url(
+    uid: str,
+    history_id: int,
+    png_bytes: bytes,
+    *,
+    upload_fn,
+    label: str,
+) -> str:
+    """Data URL by default; optional Firebase Storage when enabled (non-fatal on failure)."""
+    if not png_bytes:
+        return ""
+    image_url = f"data:image/png;base64,{base64.b64encode(png_bytes).decode()}"
+    if ENABLE_FIREBASE_STORAGE_UPLOAD:
+        try:
+            storage_url = upload_fn(uid, history_id, png_bytes)
+            if storage_url:
+                image_url = storage_url
+        except Exception as upload_exc:  # noqa: BLE001
+            print(
+                f"⚠️ Firebase Storage upload failed for {label} (history id={history_id}); "
+                f"kept PostgreSQL data URL fallback: {upload_exc}"
+            )
+    return image_url
+
+
 def persist_generation_history(
     uid: str,
     png_bytes: bytes,
     sketch_obj: dict[str, Any],
     *,
     session_id: str | None = None,
-) -> tuple[int, Any, str, str]:
+    preview_bytes: bytes | None = None,
+) -> tuple[int, Any, str, str, str]:
     """
     Insert a history row, try Firebase Storage (non-fatal if it fails), upsert draft.
     Always commits so My work / history lists stay in sync even without Storage.
@@ -85,22 +111,24 @@ def persist_generation_history(
         )
         history_id, gen_ts = cur.fetchone()
 
-        # DB-first success path: always keep a local data URL so history thumbnails/details always work.
-        image_url = f"data:image/png;base64,{base64.b64encode(png_bytes).decode()}" if png_bytes else ""
-        if png_bytes and ENABLE_FIREBASE_STORAGE_UPLOAD:
-            try:
-                storage_url = upload_generated_png(uid, history_id, png_bytes)
-                if storage_url:
-                    image_url = storage_url
-            except Exception as upload_exc:  # noqa: BLE001
-                print(
-                    f"⚠️ Firebase Storage upload failed (history id={history_id}); "
-                    f"kept PostgreSQL data URL fallback: {upload_exc}"
-                )
+        image_url = _png_bytes_to_url(
+            uid,
+            history_id,
+            png_bytes,
+            upload_fn=upload_generated_png,
+            label="generated image",
+        )
+        preview_url = _png_bytes_to_url(
+            uid,
+            history_id,
+            preview_bytes or b"",
+            upload_fn=upload_sketch_preview_png,
+            label="sketch preview",
+        )
 
         cur.execute(
-            "UPDATE history SET generated_image_url = %s WHERE id = %s AND firebase_uid = %s",
-            (image_url, history_id, uid),
+            "UPDATE history SET generated_image_url = %s, sketch_preview_url = %s WHERE id = %s AND firebase_uid = %s",
+            (image_url, preview_url, history_id, uid),
         )
 
         cur.execute(
@@ -116,7 +144,7 @@ def persist_generation_history(
         )
         conn.commit()
 
-    return history_id, gen_ts, image_url, sid
+    return history_id, gen_ts, image_url, sid, preview_url
 
 
 @router.post("/drafts/save")
@@ -211,6 +239,9 @@ async def session_generate(
     color_hints_file: UploadFile | None = File(
         None, description="Color-hint PNG for SAM/LAB (optional until pipeline wired)"
     ),
+    preview_file: UploadFile | None = File(
+        None, description="Combined sketch preview PNG (outline + color hints) for history UI"
+    ),
     sketch_json: str | None = Form(None),
     session_id: str | None = Form(None),
 ):
@@ -222,6 +253,12 @@ async def session_generate(
     sketch_raw = await _read_sketch_upload(file, sketch_file)
     if color_hints_file is not None:
         await color_hints_file.read()
+
+    preview_bytes: bytes | None = None
+    if preview_file is not None:
+        preview_raw = await preview_file.read()
+        if preview_raw:
+            preview_bytes = preview_raw
 
     try:
         canvas = Image.open(io.BytesIO(sketch_raw))
@@ -235,8 +272,8 @@ async def session_generate(
     image_b64 = base64.b64encode(png_bytes).decode()
 
     sketch_obj = _sketch_dict_from_form(sketch_json)
-    history_id, gen_ts, image_url, sid = persist_generation_history(
-        uid, png_bytes, sketch_obj, session_id=session_id
+    history_id, gen_ts, image_url, sid, preview_url = persist_generation_history(
+        uid, png_bytes, sketch_obj, session_id=session_id, preview_bytes=preview_bytes
     )
 
     return {
@@ -244,6 +281,7 @@ async def session_generate(
         "history_id": history_id,
         "session_id": sid,
         "generated_image_url": image_url,
+        "sketch_preview_url": preview_url,
         "image_base64": image_b64,
         "generation_timestamp": gen_ts.isoformat() if hasattr(gen_ts, "isoformat") else str(gen_ts),
         "pix2pix_model_version": PIX2PIX_MODEL_VERSION,
@@ -268,7 +306,7 @@ async def history_record(
         raise HTTPException(status_code=400, detail="generated_image is empty")
 
     sketch_obj = _sketch_dict_from_form(sketch_json)
-    history_id, gen_ts, image_url, sid = persist_generation_history(uid, raw, sketch_obj)
+    history_id, gen_ts, image_url, sid, _preview_url = persist_generation_history(uid, raw, sketch_obj)
     image_b64 = base64.b64encode(raw).decode()
 
     return {
@@ -364,7 +402,7 @@ def _fetch_history_bundle(conn, history_id: int, uid: str) -> tuple[Any, list[An
     cur.execute(
         """
         SELECT id, firebase_uid, sketch_json, generated_image_url, generation_timestamp,
-               session_id, pix2pix_model_version
+               session_id, pix2pix_model_version, sketch_preview_url
         FROM history WHERE id = %s AND firebase_uid = %s
         """,
         (history_id, uid),
@@ -409,6 +447,7 @@ async def get_history_detail(
         "generation_timestamp": row[4].isoformat() if row[4] else None,
         "session_id": row[5],
         "pix2pix_model_version": row[6],
+        "sketch_preview_url": row[7] or "",
     }
     search_results = _serialize_search_rows(srows)
     return {"success": True, "history": history, "search_results": search_results}

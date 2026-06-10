@@ -8,14 +8,17 @@ import 'tldraw/tldraw.css';
 import { useAuth } from '@/components/auth/AuthProvider';
 import {
     blobToBase64,
-    exportCanvasToBlob,
+    exportCombinedSketchPreviewBlob,
     exportColorHintsPngBlob,
     exportSketchPngBlob,
+    setupDesignerCamera,
     getEditorSnapshot,
+    getImagePlacementPoint,
     hasColorHintShapes,
     hasOutlineShapes,
-    loadEditorSnapshot,
+    restoreEditorSnapshot,
 } from '@/lib/tldraw-utils';
+import GenerateConfirmModal from '@/components/designer/GenerateConfirmModal';
 import SynthesisPreviewModal from '@/components/designer/SynthesisPreviewModal';
 import {
     HISTORY_ID_STORAGE_KEY,
@@ -24,13 +27,16 @@ import {
 } from '@/lib/results-entry';
 import { validateImageFileForCanvas } from '@/lib/image-import-limits';
 import { patchDesignerImageImportLimits } from '@/lib/tldraw-patch-image-imports';
+import { maybeDownloadPipelinePngsForDebug } from '@/lib/pipeline-debug-download';
 import { getFirebaseAuth } from '@/lib/firebase/client-app';
 import { isFirebaseConfigured } from '@/lib/firebase/config';
 import { useDesignerDraft } from '@/components/designer/DesignerDraftContext';
+import { useEmptyCanvasZoomReset } from '@/hooks/useEmptyCanvasZoomReset';
 
 import CustomToolbar from './CustomToolbar';
 import CustomStylePanel from './CustomStylePanel';
 import CanvasFileMenu from './CanvasFileMenu';
+import DesignerKeyboardShortcuts from './DesignerKeyboardShortcuts';
 import { DrawingModeProvider } from './DrawingModeContext';
 import { GenerateFlowProvider } from './GenerateFlowContext';
 
@@ -102,15 +108,44 @@ export default function DesignerCanvas() {
     } | null>(null);
     const [canvasToast, setCanvasToast] = useState<string | null>(null);
     const [importToast, setImportToast] = useState<string | null>(null);
+    const [draftSaveToast, setDraftSaveToast] = useState<string | null>(null);
     const [storageQuotaError, setStorageQuotaError] = useState(false);
+    const [generateConfirmOpen, setGenerateConfirmOpen] = useState(false);
+    const [generateConfirmPreviewUrl, setGenerateConfirmPreviewUrl] = useState<string | null>(null);
+    const [generateConfirmShowDefaultColor, setGenerateConfirmShowDefaultColor] = useState(false);
     const router = useRouter();
-    const draftRecoveredRef = useRef(false);
-    const { registerEditor, setGenerateActive } = useDesignerDraft();
+    const draftRecoveredEditorRef = useRef<Editor | null>(null);
+    const cameraCleanupRef = useRef<(() => void) | null>(null);
+    const generateConfirmPendingRef = useRef<{
+        sketchBlob: Blob;
+        colorHintsBlob: Blob;
+        previewBlob: Blob;
+    } | null>(null);
+    const {
+        registerEditor,
+        setGenerateActive,
+        status: draftSaveStatus,
+        saveErrorMessage,
+        clearSaveError,
+        saveDraft,
+    } = useDesignerDraft();
 
     useEffect(() => {
         registerEditor(editor);
         return () => registerEditor(null);
     }, [editor, registerEditor]);
+
+    useEffect(() => {
+        if (!editor) return;
+        cameraCleanupRef.current?.();
+        cameraCleanupRef.current = setupDesignerCamera(editor);
+        return () => {
+            cameraCleanupRef.current?.();
+            cameraCleanupRef.current = null;
+        };
+    }, [editor]);
+
+    useEmptyCanvasZoomReset(editor);
 
     useEffect(() => {
         setGenerateActive(isGenerating);
@@ -159,6 +194,21 @@ export default function DesignerCanvas() {
         return () => window.clearTimeout(id);
     }, [importToast]);
 
+    useEffect(() => {
+        if (draftSaveStatus === 'error' && saveErrorMessage) {
+            setDraftSaveToast(saveErrorMessage);
+        }
+    }, [draftSaveStatus, saveErrorMessage]);
+
+    useEffect(() => {
+        if (!draftSaveToast) return;
+        const id = window.setTimeout(() => {
+            setDraftSaveToast(null);
+            clearSaveError();
+        }, 8000);
+        return () => window.clearTimeout(id);
+    }, [draftSaveToast, clearSaveError]);
+
     /** With `hideUi`, tldraw does not mount clipboard handlers; guard image paste the same as drop/import. */
     useEffect(() => {
         if (!editor) return;
@@ -196,11 +246,10 @@ export default function DesignerCanvas() {
                 }
             }
 
-            const point = editor.getViewportPageBounds().center;
             await editor.putExternalContent({
                 type: 'files',
                 files: imageFiles,
-                point,
+                point: getImagePlacementPoint(editor),
             });
         };
 
@@ -208,9 +257,9 @@ export default function DesignerCanvas() {
         return () => doc.removeEventListener('paste', onPaste, { capture: true });
     }, [editor, notifyImportRejected]);
 
-    /** Recover sketch from history handoff or latest server draft (once per mount). */
+    /** Recover sketch from history handoff or latest server draft (once per editor instance). */
     useEffect(() => {
-        if (!editor || !isFirebaseConfigured() || draftRecoveredRef.current) {
+        if (!editor || !isFirebaseConfigured() || draftRecoveredEditorRef.current === editor) {
             return;
         }
 
@@ -218,9 +267,9 @@ export default function DesignerCanvas() {
         if (recoverRaw) {
             try {
                 const sketch = JSON.parse(recoverRaw) as TLStoreSnapshot;
-                loadEditorSnapshot(editor, sketch);
+                restoreEditorSnapshot(editor, sketch);
                 sessionStorage.removeItem(RECOVER_SKETCH_STORAGE_KEY);
-                draftRecoveredRef.current = true;
+                draftRecoveredEditorRef.current = editor;
                 return;
             } catch {
                 sessionStorage.removeItem(RECOVER_SKETCH_STORAGE_KEY);
@@ -244,14 +293,14 @@ export default function DesignerCanvas() {
                 const j = (await r.json()) as { draft?: { sketch_json?: unknown } };
                 const sketch = j.draft?.sketch_json;
                 if (!sketch || typeof sketch !== 'object' || cancelled) {
-                    draftRecoveredRef.current = true;
+                    draftRecoveredEditorRef.current = editor;
                     return;
                 }
-                loadEditorSnapshot(editor, sketch as TLStoreSnapshot);
-                draftRecoveredRef.current = true;
+                restoreEditorSnapshot(editor, sketch as TLStoreSnapshot);
+                draftRecoveredEditorRef.current = editor;
             } catch (e) {
                 console.error('Draft recovery failed:', e);
-                draftRecoveredRef.current = true;
+                draftRecoveredEditorRef.current = editor;
             }
         })();
 
@@ -391,6 +440,36 @@ export default function DesignerCanvas() {
         }
     };
 
+    const closeGenerateConfirm = useCallback(() => {
+        setGenerateConfirmOpen(false);
+        setGenerateConfirmShowDefaultColor(false);
+        setGenerateConfirmPreviewUrl((prev) => {
+            if (prev) {
+                URL.revokeObjectURL(prev);
+            }
+            return null;
+        });
+        generateConfirmPendingRef.current = null;
+    }, []);
+
+    const handleGenerateConfirmContinue = useCallback(async () => {
+        const pending = generateConfirmPendingRef.current;
+        if (!pending) {
+            return;
+        }
+        generateConfirmPendingRef.current = null;
+        setGenerateConfirmOpen(false);
+        setGenerateConfirmShowDefaultColor(false);
+        setGenerateConfirmPreviewUrl((prev) => {
+            if (prev) {
+                URL.revokeObjectURL(prev);
+            }
+            return null;
+        });
+        maybeDownloadPipelinePngsForDebug(pending.sketchBlob, pending.colorHintsBlob);
+        await startGeneration(pending);
+    }, []);
+
     const handleGenerate = async () => {
         if (!editor || isGenerating) return;
 
@@ -417,13 +496,29 @@ export default function DesignerCanvas() {
             return;
         }
 
-        if (!hasColorHintShapes(editor)) {
+        const hasColorHints = hasColorHintShapes(editor);
+        if (!hasColorHints) {
             setCanvasToast(NO_COLOR_HINTS_TOAST_MESSAGE);
         }
 
-        const previewBlob = (await exportCanvasToBlob(editor)) ?? sketchBlob;
+        const previewBlob = (await exportCombinedSketchPreviewBlob(editor)) ?? sketchBlob;
 
-        await startGeneration({ sketchBlob, colorHintsBlob, previewBlob });
+        const payload = {
+            sketchBlob,
+            colorHintsBlob,
+            previewBlob,
+        };
+
+        if (user) {
+            generateConfirmPendingRef.current = payload;
+            setGenerateConfirmShowDefaultColor(!hasColorHints);
+            setGenerateConfirmPreviewUrl(URL.createObjectURL(previewBlob));
+            setGenerateConfirmOpen(true);
+            return;
+        }
+
+        maybeDownloadPipelinePngsForDebug(sketchBlob, colorHintsBlob);
+        await startGeneration(payload);
     };
 
     return (
@@ -460,12 +555,42 @@ export default function DesignerCanvas() {
                         </div>
                     </div>
                 )}
+                {draftSaveToast && (
+                    <div
+                        role="alert"
+                        className={`${TOAST_OUTER_CLASS} bottom-56 border-red-200/90 bg-red-50/95 ring-red-500/10`}
+                    >
+                        <div className="flex items-start justify-between gap-3">
+                            <p className="text-sm leading-snug text-red-800">{draftSaveToast}</p>
+                            <div className="flex shrink-0 flex-col items-end gap-1">
+                                <button
+                                    type="button"
+                                    onClick={() => void saveDraft()}
+                                    className="text-xs font-semibold text-red-700 transition-colors hover:text-red-900"
+                                >
+                                    Retry save
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setDraftSaveToast(null);
+                                        clearSaveError();
+                                    }}
+                                    className="text-xs font-medium text-red-600 transition-colors hover:text-red-800"
+                                    aria-label="Dismiss autosave warning"
+                                >
+                                    Dismiss
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
                 {showCanvasGuide && (
                     <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10001 pointer-events-auto">
                         <div className="rounded-xl border border-purple-200 bg-white/95 px-4 py-3 shadow-lg backdrop-blur-sm">
                             <p className="text-xs font-semibold text-gray-800">Quick tip</p>
                             <p className="mt-1 text-xs text-gray-600">
-                                Use Outline mode for structure (black/grey), then Color hints for regions. Style panel: color, stroke, size, opacity.
+                                Use Outline mode for structure (black/grey), then Color hints for regions. Pinch or scroll on the canvas to zoom — Generate always exports your entire sketch.
                             </p>
                             <button
                                 type="button"
@@ -480,6 +605,16 @@ export default function DesignerCanvas() {
                         </div>
                     </div>
                 )}
+
+                <GenerateConfirmModal
+                    open={generateConfirmOpen}
+                    previewUrl={generateConfirmPreviewUrl}
+                    showDefaultColorNote={generateConfirmShowDefaultColor}
+                    onBack={closeGenerateConfirm}
+                    onContinue={() => {
+                        void handleGenerateConfirmContinue();
+                    }}
+                />
 
                 <SynthesisPreviewModal
                     open={isSynthesisPreviewOpen}
@@ -510,6 +645,7 @@ export default function DesignerCanvas() {
                     hideUi
                     inferDarkMode={false}
                 >
+                    <DesignerKeyboardShortcuts />
                     <CustomToolbar />
                     <CustomStylePanel />
                     <CanvasFileMenu />

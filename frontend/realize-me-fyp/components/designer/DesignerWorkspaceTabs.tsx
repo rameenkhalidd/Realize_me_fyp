@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { History, LayoutGrid } from 'lucide-react';
+import { History, SquarePen } from 'lucide-react';
 
 /**
  * Primary navigation between the live canvas and saved generations (history).
@@ -29,7 +29,7 @@ export function DesignerWorkspaceTabs() {
                 scroll={false}
                 title="Draw garment sketches and run AI generation"
             >
-                <LayoutGrid className="h-4 w-4 shrink-0" aria-hidden />
+                <SquarePen className="h-4 w-4 shrink-0" aria-hidden />
                 Design
             </Link>
             <Link

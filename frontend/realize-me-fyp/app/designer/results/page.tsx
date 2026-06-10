@@ -256,7 +256,7 @@ function ResultsPageContent() {
     }
 
     return (
-        <div className="bg-realize text-realize font-roboto">
+        <div className="min-h-0 flex-1 overflow-y-auto bg-realize text-realize font-roboto">
             <main className="mx-auto max-w-7xl px-6 py-8 md:py-10">
                 <h1 className="sr-only">Design comparison</h1>
 
