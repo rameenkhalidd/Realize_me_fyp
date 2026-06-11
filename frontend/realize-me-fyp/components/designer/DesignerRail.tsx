@@ -9,6 +9,7 @@ import {
     LogOut,
     PanelLeft,
     Save,
+    LayoutGrid, // ✅ NEW
 } from 'lucide-react';
 
 import { useAuth } from '@/components/auth/AuthProvider';
@@ -70,6 +71,7 @@ export default function DesignerRail({ onCloseSidebar }: DesignerRailProps) {
 
     const onDesign = pathname === '/designer';
     const onHistory = pathname.startsWith('/designer/history');
+    const onTemplates = pathname.startsWith('/designer/templates'); // ✅ NEW
 
     const accountLabel = user?.email ?? user?.displayName ?? '';
     const initial = accountLabel.trim().charAt(0).toUpperCase() || '?';
@@ -102,6 +104,15 @@ export default function DesignerRail({ onCloseSidebar }: DesignerRailProps) {
                 title="Design — Draw sketches and run AI generation"
             >
                 <SquarePen className="h-5 w-5" aria-hidden />
+            </RailIconButton>
+
+            {/* ✅ NEW: Templates */}
+            <RailIconButton
+                href="/designer/templates"
+                active={onTemplates}
+                title="Templates — Choose a base clothing design"
+            >
+                <LayoutGrid className="h-5 w-5" aria-hidden />
             </RailIconButton>
 
             <RailIconButton

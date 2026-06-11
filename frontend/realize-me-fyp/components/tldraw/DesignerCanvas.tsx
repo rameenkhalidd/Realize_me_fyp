@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { Editor, Tldraw, type TLStoreSnapshot } from 'tldraw';
 import 'tldraw/tldraw.css';
 
+
 import { useAuth } from '@/components/auth/AuthProvider';
 import {
     blobToBase64,
@@ -199,6 +200,57 @@ export default function DesignerCanvas() {
             setDraftSaveToast(saveErrorMessage);
         }
     }, [draftSaveStatus, saveErrorMessage]);
+    // Pick up a pending template placed from the Templates page
+useEffect(() => {
+    if (!editor) return;
+
+    const raw = sessionStorage.getItem('realizeme:pendingTemplate');
+    if (!raw) return;
+
+    sessionStorage.removeItem('realizeme:pendingTemplate');
+
+    let parsed: { src: string; name: string };
+    try {
+        parsed = JSON.parse(raw);
+    } catch {
+        return;
+    }
+
+    const { src, name } = parsed;
+
+    void (async () => {
+        try {
+            const response = await fetch(src);
+            const blob = await response.blob();
+            const file = new File([blob], `${name}.png`, { type: blob.type });
+
+            const point = getImagePlacementPoint(editor);
+
+            await editor.putExternalContent({
+                type: 'files',
+                files: [file],
+                point,
+            });
+
+            // Wait for tldraw to finish placing, then lock the shape
+            await new Promise(r => setTimeout(r, 120));
+
+            const allShapeIds = [...editor.getCurrentPageShapeIds()];
+            if (allShapeIds.length === 0) return;
+
+            const templateId = allShapeIds[allShapeIds.length - 1];
+            editor.updateShape({
+                id: templateId,
+                type: 'image',
+                isLocked: true,
+            });
+
+            setCanvasToast(`"${name}" added as a tracing guide. Draw over it in Outline mode.`);
+        } catch (err) {
+            console.error('Failed to place template on canvas:', err);
+        }
+    })();
+}, [editor]);
 
     useEffect(() => {
         if (!draftSaveToast) return;
