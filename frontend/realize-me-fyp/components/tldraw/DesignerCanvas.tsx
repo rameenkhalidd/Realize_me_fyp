@@ -201,56 +201,56 @@ export default function DesignerCanvas() {
         }
     }, [draftSaveStatus, saveErrorMessage]);
     // Pick up a pending template placed from the Templates page
-useEffect(() => {
-    if (!editor) return;
+    useEffect(() => {
+        if (!editor) return;
 
-    const raw = sessionStorage.getItem('realizeme:pendingTemplate');
-    if (!raw) return;
+        const raw = sessionStorage.getItem('realizeme:pendingTemplate');
+        if (!raw) return;
 
-    sessionStorage.removeItem('realizeme:pendingTemplate');
+        sessionStorage.removeItem('realizeme:pendingTemplate');
 
-    let parsed: { src: string; name: string };
-    try {
-        parsed = JSON.parse(raw);
-    } catch {
-        return;
-    }
-
-    const { src, name } = parsed;
-
-    void (async () => {
+        let parsed: { src: string; name: string };
         try {
-            const response = await fetch(src);
-            const blob = await response.blob();
-            const file = new File([blob], `${name}.png`, { type: blob.type });
-
-            const point = getImagePlacementPoint(editor);
-
-            await editor.putExternalContent({
-                type: 'files',
-                files: [file],
-                point,
-            });
-
-            // Wait for tldraw to finish placing, then lock the shape
-            await new Promise(r => setTimeout(r, 120));
-
-            const allShapeIds = [...editor.getCurrentPageShapeIds()];
-            if (allShapeIds.length === 0) return;
-
-            const templateId = allShapeIds[allShapeIds.length - 1];
-            editor.updateShape({
-                id: templateId,
-                type: 'image',
-                isLocked: true,
-            });
-
-            setCanvasToast(`"${name}" added as a tracing guide. Draw over it in Outline mode.`);
-        } catch (err) {
-            console.error('Failed to place template on canvas:', err);
+            parsed = JSON.parse(raw);
+        } catch {
+            return;
         }
-    })();
-}, [editor]);
+
+        const { src, name } = parsed;
+
+        void (async () => {
+            try {
+                const response = await fetch(src);
+                const blob = await response.blob();
+                const file = new File([blob], `${name}.png`, { type: blob.type });
+
+                const point = getImagePlacementPoint(editor);
+
+                await editor.putExternalContent({
+                    type: 'files',
+                    files: [file],
+                    point,
+                });
+
+                // Wait for tldraw to finish placing, then lock the shape
+                await new Promise(r => setTimeout(r, 120));
+
+                const allShapeIds = [...editor.getCurrentPageShapeIds()];
+                if (allShapeIds.length === 0) return;
+
+                const templateId = allShapeIds[allShapeIds.length - 1];
+                editor.updateShape({
+                    id: templateId,
+                    type: 'image',
+                    isLocked: true,
+                });
+
+                setCanvasToast(`"${name}" added as a tracing guide. Draw over it in Outline mode.`);
+            } catch (err) {
+                console.error('Failed to place template on canvas:', err);
+            }
+        })();
+    }, [editor]);
 
     useEffect(() => {
         if (!draftSaveToast) return;
@@ -402,18 +402,21 @@ useEffect(() => {
                 const idToken = await getBearerTokenForApi();
                 const formData = new FormData();
                 formData.append('file', sketchBlob, 'sketch.png');
-                formData.append('sketch_file', sketchBlob, 'sketch.png');
-                formData.append('color_hints_file', colorHintsBlob, 'color_hints.png');
+                formData.append('sketch', sketchBlob, 'sketch.png');           
+                formData.append('color_hints', colorHintsBlob, 'color_hints.png'); 
                 formData.append('preview_file', previewBlob, 'preview.png');
                 if (editor) {
                     formData.append('sketch_json', JSON.stringify(getEditorSnapshot(editor)));
                 }
 
-                const response = await fetch('/api/generate', {
+                const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL;
+                const endpoint = backendUrl
+                    ? `${backendUrl}/generate-image`
+                    : '/api/generate';
+
+                const response = await fetch(endpoint, {
                     method: 'POST',
-                    headers: {
-                        Authorization: `Bearer ${idToken}`,
-                    },
+                    ...(backendUrl ? {} : { headers: { Authorization: `Bearer ${idToken}` } }),
                     body: formData,
                 });
 
@@ -575,145 +578,145 @@ useEffect(() => {
 
     return (
         <DrawingModeProvider>
-        <GenerateFlowProvider value={generateFlowValue}>
-            <div className="relative h-full w-full bg-white">
-                {canvasToast && (
-                    <div role="alert" className={`${TOAST_OUTER_CLASS} bottom-24`}>
-                        <div className="flex items-start justify-between gap-3">
-                            <p className="text-sm leading-snug text-gray-700">{canvasToast}</p>
-                            <button
-                                type="button"
-                                onClick={() => setCanvasToast(null)}
-                                className="shrink-0 text-xs font-medium text-purple-600 transition-colors hover:text-purple-800"
-                                aria-label="Dismiss notification"
-                            >
-                                Dismiss
-                            </button>
-                        </div>
-                    </div>
-                )}
-                {importToast && (
-                    <div role="alert" className={`${TOAST_OUTER_CLASS} bottom-40`}>
-                        <div className="flex items-start justify-between gap-3">
-                            <p className="text-sm leading-snug text-gray-700">{importToast}</p>
-                            <button
-                                type="button"
-                                onClick={() => setImportToast(null)}
-                                className="shrink-0 text-xs font-medium text-purple-600 transition-colors hover:text-purple-800"
-                                aria-label="Dismiss import notification"
-                            >
-                                Dismiss
-                            </button>
-                        </div>
-                    </div>
-                )}
-                {draftSaveToast && (
-                    <div
-                        role="alert"
-                        className={`${TOAST_OUTER_CLASS} bottom-56 border-red-200/90 bg-red-50/95 ring-red-500/10`}
-                    >
-                        <div className="flex items-start justify-between gap-3">
-                            <p className="text-sm leading-snug text-red-800">{draftSaveToast}</p>
-                            <div className="flex shrink-0 flex-col items-end gap-1">
+            <GenerateFlowProvider value={generateFlowValue}>
+                <div className="relative h-full w-full bg-white">
+                    {canvasToast && (
+                        <div role="alert" className={`${TOAST_OUTER_CLASS} bottom-24`}>
+                            <div className="flex items-start justify-between gap-3">
+                                <p className="text-sm leading-snug text-gray-700">{canvasToast}</p>
                                 <button
                                     type="button"
-                                    onClick={() => void saveDraft()}
-                                    className="text-xs font-semibold text-red-700 transition-colors hover:text-red-900"
-                                >
-                                    Retry save
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => {
-                                        setDraftSaveToast(null);
-                                        clearSaveError();
-                                    }}
-                                    className="text-xs font-medium text-red-600 transition-colors hover:text-red-800"
-                                    aria-label="Dismiss autosave warning"
+                                    onClick={() => setCanvasToast(null)}
+                                    className="shrink-0 text-xs font-medium text-purple-600 transition-colors hover:text-purple-800"
+                                    aria-label="Dismiss notification"
                                 >
                                     Dismiss
                                 </button>
                             </div>
                         </div>
-                    </div>
-                )}
-                {showCanvasGuide && (
-                    <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10001 pointer-events-auto">
-                        <div className="rounded-xl border border-purple-200 bg-white/95 px-4 py-3 shadow-lg backdrop-blur-sm">
-                            <p className="text-xs font-semibold text-gray-800">Quick tip</p>
-                            <p className="mt-1 text-xs text-gray-600">
-                                Use Outline mode for structure (black/grey), then Color hints for regions. Pinch or scroll on the canvas to zoom — Generate always exports your entire sketch.
-                            </p>
-                            <button
-                                type="button"
-                                onClick={() => {
-                                    sessionStorage.setItem('realizeme:canvasGuideDismissed', '1');
-                                    setShowCanvasGuide(false);
-                                }}
-                                className="mt-2 text-xs font-medium text-purple-600 hover:text-purple-700"
-                            >
-                                Dismiss
-                            </button>
+                    )}
+                    {importToast && (
+                        <div role="alert" className={`${TOAST_OUTER_CLASS} bottom-40`}>
+                            <div className="flex items-start justify-between gap-3">
+                                <p className="text-sm leading-snug text-gray-700">{importToast}</p>
+                                <button
+                                    type="button"
+                                    onClick={() => setImportToast(null)}
+                                    className="shrink-0 text-xs font-medium text-purple-600 transition-colors hover:text-purple-800"
+                                    aria-label="Dismiss import notification"
+                                >
+                                    Dismiss
+                                </button>
+                            </div>
                         </div>
-                    </div>
-                )}
+                    )}
+                    {draftSaveToast && (
+                        <div
+                            role="alert"
+                            className={`${TOAST_OUTER_CLASS} bottom-56 border-red-200/90 bg-red-50/95 ring-red-500/10`}
+                        >
+                            <div className="flex items-start justify-between gap-3">
+                                <p className="text-sm leading-snug text-red-800">{draftSaveToast}</p>
+                                <div className="flex shrink-0 flex-col items-end gap-1">
+                                    <button
+                                        type="button"
+                                        onClick={() => void saveDraft()}
+                                        className="text-xs font-semibold text-red-700 transition-colors hover:text-red-900"
+                                    >
+                                        Retry save
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setDraftSaveToast(null);
+                                            clearSaveError();
+                                        }}
+                                        className="text-xs font-medium text-red-600 transition-colors hover:text-red-800"
+                                        aria-label="Dismiss autosave warning"
+                                    >
+                                        Dismiss
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                    {showCanvasGuide && (
+                        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10001 pointer-events-auto">
+                            <div className="rounded-xl border border-purple-200 bg-white/95 px-4 py-3 shadow-lg backdrop-blur-sm">
+                                <p className="text-xs font-semibold text-gray-800">Quick tip</p>
+                                <p className="mt-1 text-xs text-gray-600">
+                                    Use Outline mode for structure (black/grey), then Color hints for regions. Pinch or scroll on the canvas to zoom — Generate always exports your entire sketch.
+                                </p>
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        sessionStorage.setItem('realizeme:canvasGuideDismissed', '1');
+                                        setShowCanvasGuide(false);
+                                    }}
+                                    className="mt-2 text-xs font-medium text-purple-600 hover:text-purple-700"
+                                >
+                                    Dismiss
+                                </button>
+                            </div>
+                        </div>
+                    )}
 
-                <GenerateConfirmModal
-                    open={generateConfirmOpen}
-                    previewUrl={generateConfirmPreviewUrl}
-                    showDefaultColorNote={generateConfirmShowDefaultColor}
-                    onBack={closeGenerateConfirm}
-                    onContinue={() => {
-                        void handleGenerateConfirmContinue();
-                    }}
-                />
+                    <GenerateConfirmModal
+                        open={generateConfirmOpen}
+                        previewUrl={generateConfirmPreviewUrl}
+                        showDefaultColorNote={generateConfirmShowDefaultColor}
+                        onBack={closeGenerateConfirm}
+                        onContinue={() => {
+                            void handleGenerateConfirmContinue();
+                        }}
+                    />
 
-                <SynthesisPreviewModal
-                    open={isSynthesisPreviewOpen}
-                    isGenerating={isGenerating}
-                    elapsedSeconds={elapsedSeconds}
-                    stepLabel={currentStep}
-                    isDemoMode={isDemoMode}
-                    errorMessage={generationError}
-                    errorIsDestructive={storageQuotaError}
-                    onRetry={() => {
-                        if (!pendingGeneration || isGenerating) return;
-                        setStorageQuotaError(false);
-                        void startGeneration(pendingGeneration);
-                    }}
-                    onCloseError={() => {
-                        if (isGenerating) return;
-                        setIsSynthesisPreviewOpen(false);
-                        setGenerationError(null);
-                        setStorageQuotaError(false);
-                    }}
-                />
+                    <SynthesisPreviewModal
+                        open={isSynthesisPreviewOpen}
+                        isGenerating={isGenerating}
+                        elapsedSeconds={elapsedSeconds}
+                        stepLabel={currentStep}
+                        isDemoMode={isDemoMode}
+                        errorMessage={generationError}
+                        errorIsDestructive={storageQuotaError}
+                        onRetry={() => {
+                            if (!pendingGeneration || isGenerating) return;
+                            setStorageQuotaError(false);
+                            void startGeneration(pendingGeneration);
+                        }}
+                        onCloseError={() => {
+                            if (isGenerating) return;
+                            setIsSynthesisPreviewOpen(false);
+                            setGenerationError(null);
+                            setStorageQuotaError(false);
+                        }}
+                    />
 
-                <Tldraw
-                    onMount={(mountedEditor) => {
-                        setEditor(mountedEditor);
-                        patchDesignerImageImportLimits(mountedEditor, notifyImportRejected);
-                    }}
-                    hideUi
-                    inferDarkMode={false}
-                >
-                    <DesignerKeyboardShortcuts />
-                    <CustomToolbar />
-                    <CustomStylePanel />
-                    <CanvasFileMenu />
-                </Tldraw>
+                    <Tldraw
+                        onMount={(mountedEditor) => {
+                            setEditor(mountedEditor);
+                            patchDesignerImageImportLimits(mountedEditor, notifyImportRejected);
+                        }}
+                        hideUi
+                        inferDarkMode={false}
+                    >
+                        <DesignerKeyboardShortcuts />
+                        <CustomToolbar />
+                        <CustomStylePanel />
+                        <CanvasFileMenu />
+                    </Tldraw>
 
-                <button
-                    id="realize-btn"
-                    type="button"
-                    onClick={handleGenerate}
-                    disabled={isGenerating}
-                    className="hidden"
-                >
-                    Generate
-                </button>
-            </div>
-        </GenerateFlowProvider>
+                    <button
+                        id="realize-btn"
+                        type="button"
+                        onClick={handleGenerate}
+                        disabled={isGenerating}
+                        className="hidden"
+                    >
+                        Generate
+                    </button>
+                </div>
+            </GenerateFlowProvider>
         </DrawingModeProvider>
     );
 }

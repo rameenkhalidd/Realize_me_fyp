@@ -431,14 +431,36 @@ function ResultsPageContent() {
                                             </p>
 
                                             {isUsableProductUrl(product.product_url) ? (
-                                                <a
-                                                    href={product.product_url}
-                                                    target="_blank"
-                                                    rel="noopener noreferrer"
-                                                    className="block w-full rounded-lg border border-violet-200/70 bg-realize-gradient-fuchsia px-4 py-2 text-center text-sm font-semibold text-slate-900 shadow-sm transition-opacity hover:opacity-95"
-                                                >
-                                                    View Product
-                                                </a>
+                                                <div className="flex flex-col gap-2">
+                                                    {/* View Product */}
+                                                    <a
+                                                        href={product.image_url}
+                                                        target="_blank"
+                                                        rel="noopener noreferrer"
+                                                        className="block w-full rounded-lg border border-violet-200/70 bg-gray-100 px-4 py-2 text-center text-sm font-semibold text-gray-800 shadow-sm hover:bg-gray-200"
+                                                    >
+                                                        View Product
+                                                    </a>
+
+                                                    {/* Buy Product */}
+                                                    {isUsableProductUrl(product.product_url) ? (
+                                                        <a
+                                                            href={product.product_url}
+                                                            target="_blank"
+                                                            rel="noopener noreferrer"
+                                                            className="block w-full rounded-lg border border-violet-200/70 bg-realize-gradient-fuchsia px-4 py-2 text-center text-sm font-semibold text-slate-900 shadow-sm transition-opacity hover:opacity-95"
+                                                        >
+                                                            Buy Product
+                                                        </a>
+                                                    ) : (
+                                                        <p
+                                                            className="block w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-2 text-center text-sm font-medium text-gray-500"
+                                                            role="status"
+                                                        >
+                                                            Store link unavailable
+                                                        </p>
+                                                    )}
+                                                </div>
                                             ) : (
                                                 <p
                                                     className="block w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-2 text-center text-sm font-medium text-gray-500"

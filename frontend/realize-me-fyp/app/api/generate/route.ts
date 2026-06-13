@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyBearerIdTokenFromRequest } from '@/lib/firebase/admin';
+export const maxDuration = 1200; // 20 minutes in seconds (Vercel/Next.js limit)
+export const dynamic = 'force-dynamic';
 
 const BACKEND_BASE_URL = process.env.REALIZEME_BACKEND_URL?.replace(/\/$/, '');
 
@@ -106,17 +108,38 @@ async function proxySessionGenerate(
     });
 }
 
-async function proxyGeneration(sketchFile: File) {
+/**
+ * Calls /generate-image directly with the correct field names:
+ *   "sketch"      — outline PNG (required)
+ *   "color_hints" — colour-hint PNG (required; falls back to sketch if absent)
+ *
+ * Also appends an optional seed query param for reproducibility.
+ */
+async function proxyGeneration(sketchFile: File, colorHintsFile: File | null, seed?: number) {
     const backendForm = new FormData();
-    backendForm.append('file', sketchFile, sketchFile.name || 'sketch.png');
 
-    const response = await fetch(`${BACKEND_BASE_URL}/generate-image`, {
+    // FastAPI expects the field named exactly "sketch"
+    backendForm.append('sketch', sketchFile, sketchFile.name || 'sketch.png');
+
+    // FastAPI expects the field named exactly "color_hints" (required)
+    // If the frontend didn't send a colour layer yet, fall back to the sketch
+    // so the backend still receives a valid (blank-hint) image rather than a 422.
+    const hintsFile = colorHintsFile ?? sketchFile;
+    backendForm.append('color_hints', hintsFile, hintsFile.name || 'color_hints.png');
+
+    const url = new URL(`${BACKEND_BASE_URL}/generate-image`);
+    if (seed !== undefined) {
+        url.searchParams.set('seed', String(seed));
+    }
+
+    const response = await fetch(url.toString(), {
         method: 'POST',
         body: backendForm,
     });
 
     if (!response.ok) {
-        throw new Error(`Backend error: ${response.status}`);
+        const detail = await response.text();
+        throw new Error(`Backend /generate-image error ${response.status}: ${detail}`);
     }
 
     return response.json();
@@ -183,6 +206,7 @@ export async function POST(req: NextRequest) {
             'previewDataUrl' in parsedRequest ? parsedRequest.previewDataUrl : parsedRequest.dataUrl;
 
         if (BACKEND_BASE_URL && 'sketchFile' in parsedRequest && parsedRequest.sketchFile) {
+            // ── Primary path: session endpoint (/api/generate) ──────────────
             try {
                 const sessionRes = await proxySessionGenerate(
                     parsedRequest.sketchFile,
@@ -211,14 +235,24 @@ export async function POST(req: NextRequest) {
                     }
                 } else {
                     const errText = await sessionRes.text();
-                    console.warn('Session /api/generate failed, trying /generate-image:', sessionRes.status, errText);
+                    console.warn(
+                        'Session /api/generate failed, falling back to /generate-image:',
+                        sessionRes.status,
+                        errText
+                    );
                 }
             } catch (error) {
-                console.error('Session generate error, falling back:', error);
+                console.error('Session generate error, falling back to /generate-image:', error);
             }
 
+            // ── Fallback path: /generate-image (sketch + color_hints) ───────
             try {
-                const proxied = await proxyGeneration(parsedRequest.sketchFile);
+                const proxied = await proxyGeneration(
+                    parsedRequest.sketchFile,
+                    parsedRequest.colorHintsFile,
+                    // pass seed only if you expose it as a query param upstream;
+                    // leave undefined to get a random result each time
+                );
                 const b64 =
                     typeof proxied.image_base64 === 'string' ? proxied.image_base64 : undefined;
                 const generatedImage =
@@ -259,13 +293,14 @@ export async function POST(req: NextRequest) {
             }
         }
 
+        // ── Mock fallback ────────────────────────────────────────────────────
         await new Promise((resolve) => setTimeout(resolve, 500));
 
         return NextResponse.json({
             generatedImage: previewDataUrl,
             success: true,
             message: BACKEND_BASE_URL
-                ? 'We couldn’t complete the full AI render on our servers just now. Your sketch (with color hints) is on the left; the right panel shows a temporary preview until ControlNet + color processing is connected.'
+                ? 'We couldn\'t complete the full AI render on our servers just now. Your sketch (with color hints) is on the left; the right panel shows a temporary preview until ControlNet + color processing is connected.'
                 : 'Preview: your sketch is shown in both panels until the full render pipeline is connected.',
             mode: 'mock',
         });

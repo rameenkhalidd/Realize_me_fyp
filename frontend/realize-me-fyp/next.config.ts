@@ -2,6 +2,10 @@ import type { NextConfig } from "next";
 import path from "path";
 
 const nextConfig: NextConfig = {
+  serverExternalPackages: [],
+  experimental: {
+    proxyTimeout: 1200000, // 20 minutes in ms
+  },
   transpilePackages: [
     "tldraw",
     "@tldraw/editor",

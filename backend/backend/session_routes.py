@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 
 from firebase_auth_dep import require_firebase_uid
 from firebase_storage_upload import upload_generated_png, upload_sketch_preview_png
-from image_generation_local import generate_image_pix2pix
+from image_generation_controlnet import generate_image_controlnet
 from realize_db import get_connection, json_param
 
 router = APIRouter(prefix="/api", tags=["session"])
@@ -251,8 +251,10 @@ async def session_generate(
     Returns image_base64 for immediate UI plus storage URL and history_id.
     """
     sketch_raw = await _read_sketch_upload(file, sketch_file)
+
+    color_hints_raw: bytes | None = None
     if color_hints_file is not None:
-        await color_hints_file.read()
+        color_hints_raw = await color_hints_file.read() or None
 
     preview_bytes: bytes | None = None
     if preview_file is not None:
@@ -261,11 +263,20 @@ async def session_generate(
             preview_bytes = preview_raw
 
     try:
-        canvas = Image.open(io.BytesIO(sketch_raw))
+        canvas = Image.open(io.BytesIO(sketch_raw)).convert("RGB")
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=400, detail=f"Invalid sketch image file: {exc}") from exc
 
-    generated = generate_image_pix2pix(canvas)
+    try:
+        hints_img = (
+            Image.open(io.BytesIO(color_hints_raw))
+            if color_hints_raw
+            else canvas  # fallback: no hints → reuse sketch
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"Invalid color hints image file: {exc}") from exc
+
+    generated = generate_image_controlnet(sketch=canvas, color_hints=hints_img)
     buf = io.BytesIO()
     generated.save(buf, format="PNG")
     png_bytes = buf.getvalue()
