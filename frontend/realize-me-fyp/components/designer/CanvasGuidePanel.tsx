@@ -124,7 +124,7 @@ export default function CanvasGuidePanel({ variant = 'full' }: CanvasGuidePanelP
                             <h3 className="font-raleway text-sm font-semibold text-gray-900">1. Tools</h3>
                             <p className="mt-0.5 text-sm leading-snug text-gray-600">
                                 Left sidebar: <strong className="text-gray-800">Design</strong> and{' '}
-                                <strong className="text-gray-800">My work</strong>. Bottom bar: draw tools. Top left: import and export. Pinch or two-finger scroll on the canvas to zoom and pan.
+                                <strong className="text-gray-800">My work</strong>. Bottom bar: draw tools. Top left: import and export. Pinch or two-finger scroll on the canvas to zoom and pan. Click the zoom % to reset to 100%; use Fit to see your whole sketch.
                             </p>
                         </div>
                     </div>

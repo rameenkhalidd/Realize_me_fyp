@@ -4,6 +4,7 @@ import {
     createContext,
     useCallback,
     useContext,
+    useEffect,
     useMemo,
     useState,
     type ReactNode,
@@ -14,7 +15,7 @@ import { useAuth } from '@/components/auth/AuthProvider';
 import { isFirebaseConfigured } from '@/lib/firebase/config';
 import { useDraftAutosave, type DraftSaveStatus } from '@/hooks/useDraftAutosave';
 
-type DesignerDraftContextValue = {
+export type DesignerDraftContextValue = {
     visible: boolean;
     status: DraftSaveStatus;
     lastSavedAt: Date | null;
@@ -24,6 +25,8 @@ type DesignerDraftContextValue = {
     clearSaveError: () => void;
     registerEditor: (editor: Editor | null) => void;
     setGenerateActive: (active: boolean) => void;
+    /** Any shapes on the designer canvas (strokes, imports, templates). Read-only for sign-out copy. */
+    hasCanvasShapes: boolean;
 };
 
 const DesignerDraftContext = createContext<DesignerDraftContextValue | null>(null);
@@ -32,6 +35,7 @@ export function DesignerDraftProvider({ children }: { children: ReactNode }) {
     const { user } = useAuth();
     const [editor, setEditor] = useState<Editor | null>(null);
     const [generateActive, setGenerateActive] = useState(false);
+    const [hasCanvasShapes, setHasCanvasShapes] = useState(false);
 
     const draftsEnabled = isFirebaseConfigured() && !!user;
     const { status, lastSavedAt, saveErrorMessage, clearSaveError, saveNow } = useDraftAutosave(editor, {
@@ -42,6 +46,19 @@ export function DesignerDraftProvider({ children }: { children: ReactNode }) {
     const registerEditor = useCallback((next: Editor | null) => {
         setEditor(next);
     }, []);
+
+    useEffect(() => {
+        if (!editor) {
+            setHasCanvasShapes(false);
+            return;
+        }
+        const update = () => {
+            setHasCanvasShapes(editor.getCurrentPageShapeIds().size > 0);
+        };
+        update();
+        const removeListener = editor.store.listen(update, { scope: 'document' });
+        return () => removeListener();
+    }, [editor]);
 
     const saveDraft = useCallback(async () => {
         if (!draftsEnabled) {
@@ -79,8 +96,9 @@ export function DesignerDraftProvider({ children }: { children: ReactNode }) {
             clearSaveError,
             registerEditor,
             setGenerateActive: setGenerateActive,
+            hasCanvasShapes,
         }),
-        [draftsEnabled, status, lastSavedAt, saveErrorMessage, generateActive, saveDraft, clearSaveError, registerEditor]
+        [draftsEnabled, status, lastSavedAt, saveErrorMessage, generateActive, saveDraft, clearSaveError, registerEditor, hasCanvasShapes]
     );
 
     return (

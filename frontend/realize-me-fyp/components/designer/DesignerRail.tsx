@@ -2,154 +2,198 @@
 
 import type { ReactNode } from 'react';
 import Link from 'next/link';
-import { usePathname, useRouter } from 'next/navigation';
-import {
-    History,
-    SquarePen,
-    LogOut,
-    PanelLeft,
-    Save,
-    LayoutGrid, // ✅ NEW
-} from 'lucide-react';
+import { usePathname, useSearchParams } from 'next/navigation';
+import { History, SquarePen, LogOut, PanelLeft, LayoutGrid } from 'lucide-react';
 
 import { useAuth } from '@/components/auth/AuthProvider';
-import { useDesignerDraftOptional } from '@/components/designer/DesignerDraftContext';
+import { getAccountInitial } from '@/lib/auth-user-utils';
 import { isFirebaseConfigured } from '@/lib/firebase/config';
+import { buildDesignerAccountHrefFromContext } from '@/lib/designer-account-return';
+import { useSignOutConfirm } from '@/components/designer/SignOutConfirmContext';
 import { INTERACTIVE_BUTTON_MOTION } from '@/lib/interactive-button-motion';
 
 type DesignerRailProps = {
-    onCloseSidebar: () => void;
+    expanded: boolean;
+    onToggleExpanded: () => void;
+    reduceMotion?: boolean | null;
 };
 
-function RailIconButton({
-    active,
-    title,
-    onClick,
-    href,
-    children,
-    disabled,
+function navItemClass(active: boolean, expanded: boolean): string {
+    return [
+        'flex items-center rounded-md text-xs font-medium transition-colors',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/50',
+        INTERACTIVE_BUTTON_MOTION,
+        expanded ? 'h-9 w-full gap-2 px-1.5' : 'mx-auto h-9 w-9 justify-center',
+        active ? 'bg-gray-800 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white',
+    ].join(' ');
+}
+
+function labelClass(expanded: boolean, reduceMotion?: boolean | null): string {
+    return [
+        'truncate whitespace-nowrap text-xs',
+        expanded ? 'opacity-100' : 'pointer-events-none opacity-0',
+        reduceMotion ? '' : 'transition-opacity duration-150',
+    ]
+        .filter(Boolean)
+        .join(' ');
+}
+
+type NavItemConfig = {
+    href: string;
+    label: string;
+    collapsedTitle: string;
+    active: boolean;
+    icon: ReactNode;
+};
+
+function RailNavItem({
+    item,
+    expanded,
+    reduceMotion,
 }: {
-    active?: boolean;
-    title: string;
-    onClick?: () => void;
-    href?: string;
-    children: ReactNode;
-    disabled?: boolean;
+    item: NavItemConfig;
+    expanded: boolean;
+    reduceMotion?: boolean | null;
 }) {
-    const className = `inline-flex h-9 w-9 items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/50 disabled:pointer-events-none disabled:opacity-40 ${INTERACTIVE_BUTTON_MOTION} ${
-        active
-            ? 'bg-gray-800 text-white'
-            : 'text-gray-400 hover:bg-gray-800 hover:text-white'
-    }`;
-
-    if (href) {
-        return (
-            <Link href={href} className={className} title={title} scroll={false}>
-                {children}
-            </Link>
-        );
-    }
-
     return (
-        <button
-            type="button"
-            className={className}
-            title={title}
-            onClick={onClick}
-            disabled={disabled}
+        <Link
+            href={item.href}
+            scroll={false}
+            aria-label={item.label}
+            title={expanded ? undefined : item.collapsedTitle}
+            className={navItemClass(item.active, expanded)}
         >
-            {children}
-        </button>
+            <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center">{item.icon}</span>
+            <span className={labelClass(expanded, reduceMotion)} aria-hidden={!expanded}>
+                {item.label}
+            </span>
+        </Link>
     );
 }
 
-export default function DesignerRail({ onCloseSidebar }: DesignerRailProps) {
+function AccountAvatarLink({
+    initial,
+    onAccount,
+    href,
+    title,
+    className,
+}: {
+    initial: string;
+    onAccount: boolean;
+    href: string;
+    title?: string;
+    className?: string;
+}) {
+    return (
+        <Link
+            href={href}
+            scroll={false}
+            aria-label="Account settings"
+            title={title}
+            className={`flex h-9 w-9 items-center justify-center rounded-full bg-linear-to-br from-violet-500 to-cyan-500 text-xs font-bold text-white transition-all duration-150 hover:ring-2 hover:ring-violet-400/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/60 ${
+                onAccount ? 'ring-2 ring-violet-400/80' : ''
+            } ${className ?? ''}`}
+        >
+            {initial}
+        </Link>
+    );
+}
+
+export default function DesignerRail({ expanded, onToggleExpanded, reduceMotion }: DesignerRailProps) {
     const pathname = usePathname();
-    const router = useRouter();
-    const { user, signOut } = useAuth();
-    const draft = useDesignerDraftOptional();
+    const searchParams = useSearchParams();
+    const { user } = useAuth();
+    const { requestSignOut } = useSignOutConfirm();
 
     const onDesign = pathname === '/designer';
     const onHistory = pathname.startsWith('/designer/history');
-    const onTemplates = pathname.startsWith('/designer/templates'); // ✅ NEW
+    const onTemplates = pathname.startsWith('/designer/templates');
+    const onAccount = pathname.startsWith('/designer/account');
 
-    const accountLabel = user?.email ?? user?.displayName ?? '';
-    const initial = accountLabel.trim().charAt(0).toUpperCase() || '?';
+    const initial = getAccountInitial(user);
+    const accountHref = buildDesignerAccountHrefFromContext(pathname, searchParams);
 
-    const handleSignOut = async () => {
-        try {
-            await signOut();
-        } finally {
-            router.replace('/login');
-        }
-    };
-
-    const handleSaveDraft = () => {
-        if (draft && onDesign) {
-            void draft.saveDraft();
-        }
-    };
+    const navItems: NavItemConfig[] = [
+        {
+            href: '/designer',
+            label: 'Canvas',
+            collapsedTitle: 'Go to Canvas',
+            active: onDesign,
+            icon: <SquarePen className="h-5 w-5" aria-hidden />,
+        },
+        {
+            href: '/designer/templates',
+            label: 'Templates',
+            collapsedTitle: 'Go to Templates',
+            active: onTemplates,
+            icon: <LayoutGrid className="h-5 w-5" aria-hidden />,
+        },
+        {
+            href: '/designer/history',
+            label: 'My work',
+            collapsedTitle: 'Go to My work',
+            active: onHistory,
+            icon: <History className="h-5 w-5" aria-hidden />,
+        },
+    ];
 
     return (
-        <div className="flex w-14 flex-col items-center gap-4 py-4">
-            <RailIconButton title="Close sidebar" onClick={onCloseSidebar}>
-                <PanelLeft className="h-5 w-5" aria-hidden />
-            </RailIconButton>
-
-            <div className="my-1 h-px w-8 bg-gray-800" aria-hidden />
-
-            <RailIconButton
-                href="/designer"
-                active={onDesign}
-                title="Design — Draw sketches and run AI generation"
-            >
-                <SquarePen className="h-5 w-5" aria-hidden />
-            </RailIconButton>
-
-            {/* ✅ NEW: Templates */}
-            <RailIconButton
-                href="/designer/templates"
-                active={onTemplates}
-                title="Templates — Choose a base clothing design"
-            >
-                <LayoutGrid className="h-5 w-5" aria-hidden />
-            </RailIconButton>
-
-            <RailIconButton
-                href="/designer/history"
-                active={onHistory}
-                title="My work — View past generations and reopen sketches"
-            >
-                <History className="h-5 w-5" aria-hidden />
-            </RailIconButton>
-
-            {draft?.visible && onDesign ? (
-                <RailIconButton
-                    title="Save draft — Stores sketch to your account"
-                    onClick={handleSaveDraft}
-                    disabled={draft.saveDisabled}
+        <div
+            className={`flex h-full min-h-0 flex-col gap-2 overflow-hidden py-4 pb-14 ${expanded ? 'px-1.5' : 'items-center px-1'}`}
+        >
+            <div className="flex w-full justify-center">
+                <button
+                    type="button"
+                    onClick={onToggleExpanded}
+                    aria-expanded={expanded}
+                    aria-label={expanded ? 'Collapse sidebar' : 'Expand sidebar'}
+                    title={expanded ? 'Collapse sidebar' : 'Expand sidebar'}
+                    className={`inline-flex h-9 w-9 items-center justify-center rounded-md text-gray-400 transition-colors hover:bg-gray-800 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/50 ${INTERACTIVE_BUTTON_MOTION}`}
                 >
-                    <Save className="h-5 w-5" aria-hidden />
-                </RailIconButton>
-            ) : null}
-
-            <div className="mt-auto flex w-full flex-col items-center gap-4">
-                <div className="h-px w-8 bg-gray-800" aria-hidden />
-
-                {isFirebaseConfigured() && user ? (
-                    <>
-                        <div
-                            className="flex h-9 w-9 items-center justify-center rounded-full bg-linear-to-br from-violet-500 to-cyan-500 text-xs font-bold text-white"
-                            title={accountLabel || 'Signed in'}
-                        >
-                            {initial}
-                        </div>
-                        <RailIconButton title="Sign out" onClick={() => void handleSignOut()}>
-                            <LogOut className="h-5 w-5" aria-hidden />
-                        </RailIconButton>
-                    </>
-                ) : null}
+                    <PanelLeft className="h-5 w-5" aria-hidden />
+                </button>
             </div>
+
+            <div
+                className={`h-px bg-gray-800 ${expanded ? 'mx-1 w-auto' : 'w-8'}`}
+                aria-hidden
+            />
+
+            <nav className={`flex flex-col gap-1 ${expanded ? 'w-full' : 'w-full items-center'}`}>
+                {navItems.map((item) => (
+                    <RailNavItem
+                        key={item.href}
+                        item={item}
+                        expanded={expanded}
+                        reduceMotion={reduceMotion}
+                    />
+                ))}
+            </nav>
+
+            {isFirebaseConfigured() && user ? (
+                <div className="mt-auto flex w-full flex-col items-center gap-2 pt-2">
+                    <div
+                        className={`h-px bg-gray-800 ${expanded ? 'mx-1 w-auto self-stretch' : 'w-8'}`}
+                        aria-hidden
+                    />
+
+                    <AccountAvatarLink
+                        initial={initial}
+                        onAccount={onAccount}
+                        href={accountHref}
+                        title="Account settings"
+                    />
+                    <button
+                        type="button"
+                        onClick={requestSignOut}
+                        aria-label="Sign out"
+                        title="Sign out"
+                        className={navItemClass(false, false)}
+                    >
+                        <LogOut className="h-5 w-5" aria-hidden />
+                    </button>
+                </div>
+            ) : null}
         </div>
     );
 }

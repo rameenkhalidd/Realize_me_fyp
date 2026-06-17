@@ -11,6 +11,7 @@ import {
     type TLDefaultSizeStyle,
 } from 'tldraw';
 import { useContext, useEffect, useRef, useState } from 'react';
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 
 import { CANVAS_PALETTE_COLORS, getNearestColorToken, OUTLINE_COLOR_TOKENS } from '@/lib/canvas-colors';
 import DrawingModeSwitch from '@/components/tldraw/DrawingModeSwitch';
@@ -42,6 +43,7 @@ export default function CustomStylePanel() {
     const generateFlow = useContext(GenerateFlowContext);
     const isGenerating = generateFlow?.isGenerating ?? false;
     const { mode, isDesignerWorkspace } = useDrawingMode();
+    const reduceMotion = useReducedMotion();
     const [customHex, setCustomHex] = useState('#ef4444');
     const [opacityPercent, setOpacityPercent] = useState(100);
     const [isOpacityDragging, setIsOpacityDragging] = useState(false);
@@ -182,24 +184,33 @@ export default function CustomStylePanel() {
                             );
                         })}
                     </div>
-                    <div className="mt-2 h-8">
-                        {!isOutlineMode ? (
-                            <label className="flex h-full cursor-pointer items-center gap-2">
-                                <input
-                                    type="color"
-                                    value={customHex}
-                                    onChange={(event) => {
-                                        const value = event.target.value;
-                                        setCustomHex(value);
-                                        applyNearestCustomColor(value);
-                                    }}
-                                    className="h-7 w-7 shrink-0 cursor-pointer rounded-md border border-gray-200 bg-white p-0.5"
-                                    title="Pick a custom color"
-                                    aria-label="Pick a custom color"
-                                />
-                                <span className="text-[10px] text-gray-600">Custom picker</span>
-                            </label>
-                        ) : null}
+                    <div className="mt-2 h-8 overflow-hidden">
+                        <AnimatePresence mode="wait" initial={false}>
+                            {!isOutlineMode ? (
+                                <motion.label
+                                    key="custom-picker"
+                                    className="flex h-full cursor-pointer items-center gap-2"
+                                    initial={reduceMotion ? false : { opacity: 0 }}
+                                    animate={{ opacity: 1 }}
+                                    exit={{ opacity: 0 }}
+                                    transition={{ duration: reduceMotion ? 0 : 0.2 }}
+                                >
+                                    <input
+                                        type="color"
+                                        value={customHex}
+                                        onChange={(event) => {
+                                            const value = event.target.value;
+                                            setCustomHex(value);
+                                            applyNearestCustomColor(value);
+                                        }}
+                                        className="h-7 w-7 shrink-0 cursor-pointer rounded-md border border-gray-200 bg-white p-0.5"
+                                        title="Pick a custom color"
+                                        aria-label="Pick a custom color"
+                                    />
+                                    <span className="text-[10px] text-gray-600">Custom picker</span>
+                                </motion.label>
+                            ) : null}
+                        </AnimatePresence>
                     </div>
                 </div>
 

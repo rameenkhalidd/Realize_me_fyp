@@ -6,6 +6,8 @@ export type GenerateFlowContextValue = {
     isGenerating: boolean;
     notifyEmptyCanvas: () => void;
     notifyImportRejected: (message: string) => void;
+    /** Show a message in the canvas toast (same toast used for generate/template notices). */
+    notifyCanvasMessage: (message: string) => void;
 };
 
 export const GenerateFlowContext = createContext<GenerateFlowContextValue | null>(null);

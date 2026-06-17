@@ -2,25 +2,35 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Editor, Tldraw, type TLStoreSnapshot } from 'tldraw';
+import { Editor, Tldraw, type TLShapeId, type TLStoreSnapshot } from 'tldraw';
 import 'tldraw/tldraw.css';
 
 
 import { useAuth } from '@/components/auth/AuthProvider';
 import {
     blobToBase64,
+    clearAllCanvasShapes,
     exportCombinedSketchPreviewBlob,
     exportColorHintsPngBlob,
     exportSketchPngBlob,
     setupDesignerCamera,
     getEditorSnapshot,
     getImagePlacementPoint,
+    getActiveTemplateGarment,
     hasColorHintShapes,
     hasOutlineShapes,
     restoreEditorSnapshot,
+    type ActiveTemplateGarment,
 } from '@/lib/tldraw-utils';
-import GenerateConfirmModal from '@/components/designer/GenerateConfirmModal';
+import GenerateConfirmModal, {
+    type GenerateCategorySelection,
+} from '@/components/designer/GenerateConfirmModal';
+import { findTemplateBySrcOrName } from '@/components/designer/templates';
 import SynthesisPreviewModal from '@/components/designer/SynthesisPreviewModal';
+import {
+    DEFAULT_GARMENT_LABEL,
+    DEFAULT_GENERATION_CATEGORY_ID,
+} from '@/lib/generation-categories';
 import {
     HISTORY_ID_STORAGE_KEY,
     RECOVER_SKETCH_STORAGE_KEY,
@@ -38,6 +48,7 @@ import CustomToolbar from './CustomToolbar';
 import CustomStylePanel from './CustomStylePanel';
 import CanvasFileMenu from './CanvasFileMenu';
 import DesignerKeyboardShortcuts from './DesignerKeyboardShortcuts';
+import DesignerToastStack from './DesignerToastStack';
 import { DrawingModeProvider } from './DrawingModeContext';
 import { GenerateFlowProvider } from './GenerateFlowContext';
 
@@ -52,8 +63,9 @@ const STORAGE_QUOTA_USER_MESSAGE =
     'This design is too large to generate an image. Try removing large image imports or simplifying the sketch.';
 const AUTH_REQUIRED_USER_MESSAGE = 'Your session expired. Please sign in again to generate.';
 
-const TOAST_OUTER_CLASS =
-    'fixed left-1/2 z-10050 w-[min(calc(100vw-2rem),24rem)] -translate-x-1/2 rounded-xl border border-purple-200/90 bg-white/95 px-4 py-3 font-roboto shadow-md backdrop-blur-sm ring-1 ring-violet-500/10 transition-opacity duration-200';
+const PENDING_TEMPLATE_STORAGE_KEY = 'realizeme:pendingTemplate';
+const TEMPLATE_LOAD_ERROR_MESSAGE =
+    "Couldn't load the template. Check your connection and try again from Templates.";
 
 const SYNTHESIS_STEPS = [
     'Reading sketch lines and proportions...',
@@ -79,6 +91,90 @@ function wait(ms: number) {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+type GenerationPayload = {
+    sketchBlob: Blob;
+    colorHintsBlob: Blob;
+    previewBlob: Blob;
+    generationCategoryId?: string;
+    garmentLabel?: string;
+};
+
+type PendingTemplate = {
+    id: string;
+    src: string;
+    name: string;
+    garmentLabel: string;
+    generationCategoryId: string;
+};
+
+/** Read (without consuming) the template handoff from the Templates page; discard malformed entries. */
+function readPendingTemplate(): PendingTemplate | null {
+    const raw = sessionStorage.getItem(PENDING_TEMPLATE_STORAGE_KEY);
+    if (!raw) {
+        return null;
+    }
+    try {
+        const parsed = JSON.parse(raw) as {
+            id?: unknown;
+            src?: unknown;
+            name?: unknown;
+            garmentLabel?: unknown;
+            generationCategoryId?: unknown;
+        };
+        if (typeof parsed.src === 'string' && typeof parsed.name === 'string') {
+            if (
+                typeof parsed.id === 'string' &&
+                typeof parsed.garmentLabel === 'string' &&
+                typeof parsed.generationCategoryId === 'string'
+            ) {
+                return {
+                    id: parsed.id,
+                    src: parsed.src,
+                    name: parsed.name,
+                    garmentLabel: parsed.garmentLabel,
+                    generationCategoryId: parsed.generationCategoryId,
+                };
+            }
+
+            const match = findTemplateBySrcOrName(parsed.src, parsed.name);
+            if (match) {
+                return {
+                    id: match.id,
+                    src: match.src,
+                    name: match.name,
+                    garmentLabel: match.garmentLabel,
+                    generationCategoryId: match.generationCategoryId,
+                };
+            }
+        }
+    } catch {
+        // fall through — malformed entry is removed below
+    }
+    sessionStorage.removeItem(PENDING_TEMPLATE_STORAGE_KEY);
+    return null;
+}
+
+/** Wait for shape ids that were not present before an async placement (instead of a blind timeout). */
+async function waitForNewShapeIds(
+    editor: Editor,
+    beforeIds: ReadonlySet<TLShapeId>,
+    timeoutMs = 2000
+): Promise<TLShapeId[]> {
+    const startedAt = Date.now();
+    for (; ;) {
+        const fresh = Array.from(editor.getCurrentPageShapeIds()).filter(
+            (id) => !beforeIds.has(id)
+        );
+        if (fresh.length > 0) {
+            return fresh;
+        }
+        if (Date.now() - startedAt >= timeoutMs || editor.isDisposed) {
+            return [];
+        }
+        await wait(50);
+    }
+}
+
 async function getBearerTokenForApi() {
     const auth = getFirebaseAuth();
     const currentUser = auth?.currentUser;
@@ -102,11 +198,7 @@ export default function DesignerCanvas() {
     const [generationError, setGenerationError] = useState<string | null>(null);
     const [elapsedSeconds, setElapsedSeconds] = useState(0);
     const [isDemoMode, setIsDemoMode] = useState(USE_MOCK_GENERATION);
-    const [pendingGeneration, setPendingGeneration] = useState<{
-        sketchBlob: Blob;
-        colorHintsBlob: Blob;
-        previewBlob: Blob;
-    } | null>(null);
+    const [pendingGeneration, setPendingGeneration] = useState<GenerationPayload | null>(null);
     const [canvasToast, setCanvasToast] = useState<string | null>(null);
     const [importToast, setImportToast] = useState<string | null>(null);
     const [draftSaveToast, setDraftSaveToast] = useState<string | null>(null);
@@ -114,14 +206,12 @@ export default function DesignerCanvas() {
     const [generateConfirmOpen, setGenerateConfirmOpen] = useState(false);
     const [generateConfirmPreviewUrl, setGenerateConfirmPreviewUrl] = useState<string | null>(null);
     const [generateConfirmShowDefaultColor, setGenerateConfirmShowDefaultColor] = useState(false);
+    const [generateConfirmDetectedGarment, setGenerateConfirmDetectedGarment] =
+        useState<ActiveTemplateGarment | null>(null);
     const router = useRouter();
     const draftRecoveredEditorRef = useRef<Editor | null>(null);
     const cameraCleanupRef = useRef<(() => void) | null>(null);
-    const generateConfirmPendingRef = useRef<{
-        sketchBlob: Blob;
-        colorHintsBlob: Blob;
-        previewBlob: Blob;
-    } | null>(null);
+    const generateConfirmPendingRef = useRef<GenerationPayload | null>(null);
     const {
         registerEditor,
         setGenerateActive,
@@ -160,9 +250,13 @@ export default function DesignerCanvas() {
         setImportToast(message);
     }, []);
 
+    const notifyCanvasMessage = useCallback((message: string) => {
+        setCanvasToast(message);
+    }, []);
+
     const generateFlowValue = useMemo(
-        () => ({ isGenerating, notifyEmptyCanvas, notifyImportRejected }),
-        [isGenerating, notifyEmptyCanvas, notifyImportRejected]
+        () => ({ isGenerating, notifyEmptyCanvas, notifyImportRejected, notifyCanvasMessage }),
+        [isGenerating, notifyEmptyCanvas, notifyImportRejected, notifyCanvasMessage]
     );
 
     useEffect(() => {
@@ -200,57 +294,6 @@ export default function DesignerCanvas() {
             setDraftSaveToast(saveErrorMessage);
         }
     }, [draftSaveStatus, saveErrorMessage]);
-    // Pick up a pending template placed from the Templates page
-    useEffect(() => {
-        if (!editor) return;
-
-        const raw = sessionStorage.getItem('realizeme:pendingTemplate');
-        if (!raw) return;
-
-        sessionStorage.removeItem('realizeme:pendingTemplate');
-
-        let parsed: { src: string; name: string };
-        try {
-            parsed = JSON.parse(raw);
-        } catch {
-            return;
-        }
-
-        const { src, name } = parsed;
-
-        void (async () => {
-            try {
-                const response = await fetch(src);
-                const blob = await response.blob();
-                const file = new File([blob], `${name}.png`, { type: blob.type });
-
-                const point = getImagePlacementPoint(editor);
-
-                await editor.putExternalContent({
-                    type: 'files',
-                    files: [file],
-                    point,
-                });
-
-                // Wait for tldraw to finish placing, then lock the shape
-                await new Promise(r => setTimeout(r, 120));
-
-                const allShapeIds = [...editor.getCurrentPageShapeIds()];
-                if (allShapeIds.length === 0) return;
-
-                const templateId = allShapeIds[allShapeIds.length - 1];
-                editor.updateShape({
-                    id: templateId,
-                    type: 'image',
-                    isLocked: true,
-                });
-
-                setCanvasToast(`"${name}" added as a tracing guide. Draw over it in Outline mode.`);
-            } catch (err) {
-                console.error('Failed to place template on canvas:', err);
-            }
-        })();
-    }, [editor]);
 
     useEffect(() => {
         if (!draftSaveToast) return;
@@ -309,9 +352,100 @@ export default function DesignerCanvas() {
         return () => doc.removeEventListener('paste', onPaste, { capture: true });
     }, [editor, notifyImportRejected]);
 
-    /** Recover sketch from history handoff or latest server draft (once per editor instance). */
+    /**
+     * Canvas bootstrap, once per editor instance, in strict order:
+     * 1. A pending template from the Templates page WINS — fresh canvas, draft recovery skipped
+     *    entirely (Option C: the old draft is replaced by the next autosave).
+     * 2. Otherwise recover the sketch from a history handoff or the latest server draft.
+     */
     useEffect(() => {
-        if (!editor || !isFirebaseConfigured() || draftRecoveredEditorRef.current === editor) {
+        if (!editor || draftRecoveredEditorRef.current === editor) {
+            return;
+        }
+
+        const pendingTemplate = readPendingTemplate();
+
+        if (pendingTemplate) {
+            draftRecoveredEditorRef.current = editor;
+            // Template wins: drop any stale history handoff so it can't restore on a later visit.
+            sessionStorage.removeItem(RECOVER_SKETCH_STORAGE_KEY);
+
+            const { src, name, id, garmentLabel, generationCategoryId } = pendingTemplate;
+            void (async () => {
+                try {
+                    const response = await fetch(src);
+                    if (!response.ok) {
+                        throw new Error(`Template fetch failed (${response.status})`);
+                    }
+                    const blob = await response.blob();
+                    const file = new File([blob], `${name}.png`, {
+                        type: blob.type || 'image/png',
+                    });
+
+                    // Fresh canvas at 100% zoom, then place the template at the viewport center.
+                    clearAllCanvasShapes(editor);
+
+                    const beforeIds = new Set<TLShapeId>(editor.getCurrentPageShapeIds());
+                    await editor.putExternalContent({
+                        type: 'files',
+                        files: [file],
+                        point: getImagePlacementPoint(editor),
+                    });
+
+                    const templateIds = await waitForNewShapeIds(editor, beforeIds);
+                    if (templateIds.length === 0) {
+                        throw new Error('Template shape was not created');
+                    }
+
+                    // Lock + tag so "New sketch" and the Remove template button can find it reliably.
+                    // History-ignored so a single Ctrl+Z removes the template itself.
+                    editor.run(
+                        () => {
+                            editor.updateShapes(
+                                templateIds.map((shapeId) => {
+                                    const shape = editor.getShape(shapeId);
+                                    return {
+                                        id: shapeId,
+                                        type: shape?.type ?? 'image',
+                                        isLocked: true,
+                                        meta: {
+                                            ...shape?.meta,
+                                            isTemplate: true,
+                                            templateId: id,
+                                            templateName: name,
+                                            garmentLabel,
+                                            generationCategoryId,
+                                        },
+                                    };
+                                })
+                            );
+                        },
+                        { history: 'ignore' }
+                    );
+
+                    sessionStorage.removeItem(PENDING_TEMPLATE_STORAGE_KEY);
+                    setCanvasToast(
+                        `"${name}" added template. Use as it is or draw over it in Outline mode.`
+                    );
+                } catch (err) {
+                    console.error('Failed to place template on canvas:', err);
+                    if (editor.isDisposed) {
+                        // Editor remounted mid-flight (e.g. React StrictMode): keep the
+                        // sessionStorage key so the next editor instance retries placement.
+                        if (draftRecoveredEditorRef.current === editor) {
+                            draftRecoveredEditorRef.current = null;
+                        }
+                        return;
+                    }
+                    sessionStorage.removeItem(PENDING_TEMPLATE_STORAGE_KEY);
+                    setCanvasToast(TEMPLATE_LOAD_ERROR_MESSAGE);
+                }
+            })();
+            return;
+        }
+
+        // --- No pending template: recover sketch from history handoff or latest server draft. ---
+        if (!isFirebaseConfigured()) {
             return;
         }
 
@@ -375,12 +509,11 @@ export default function DesignerCanvas() {
         };
     };
 
-    const startGeneration = async (payload: {
-        sketchBlob: Blob;
-        colorHintsBlob: Blob;
-        previewBlob: Blob;
-    }) => {
+    const startGeneration = async (payload: GenerationPayload) => {
         const { sketchBlob, colorHintsBlob, previewBlob } = payload;
+        const generationCategoryId =
+            payload.generationCategoryId ?? DEFAULT_GENERATION_CATEGORY_ID;
+        const garmentLabel = payload.garmentLabel ?? DEFAULT_GARMENT_LABEL;
         setIsSynthesisPreviewOpen(true);
         setGenerationError(null);
         setStorageQuotaError(false);
@@ -405,6 +538,8 @@ export default function DesignerCanvas() {
                 formData.append('sketch', sketchBlob, 'sketch.png');           
                 formData.append('color_hints', colorHintsBlob, 'color_hints.png'); 
                 formData.append('preview_file', previewBlob, 'preview.png');
+                formData.append('generation_category_id', generationCategoryId);
+                formData.append('garment_label', garmentLabel);
                 if (editor) {
                     formData.append('sketch_json', JSON.stringify(getEditorSnapshot(editor)));
                 }
@@ -498,6 +633,7 @@ export default function DesignerCanvas() {
     const closeGenerateConfirm = useCallback(() => {
         setGenerateConfirmOpen(false);
         setGenerateConfirmShowDefaultColor(false);
+        setGenerateConfirmDetectedGarment(null);
         setGenerateConfirmPreviewUrl((prev) => {
             if (prev) {
                 URL.revokeObjectURL(prev);
@@ -507,23 +643,31 @@ export default function DesignerCanvas() {
         generateConfirmPendingRef.current = null;
     }, []);
 
-    const handleGenerateConfirmContinue = useCallback(async () => {
-        const pending = generateConfirmPendingRef.current;
-        if (!pending) {
-            return;
-        }
-        generateConfirmPendingRef.current = null;
-        setGenerateConfirmOpen(false);
-        setGenerateConfirmShowDefaultColor(false);
-        setGenerateConfirmPreviewUrl((prev) => {
-            if (prev) {
-                URL.revokeObjectURL(prev);
+    const handleGenerateConfirmContinue = useCallback(
+        async (category: GenerateCategorySelection) => {
+            const pending = generateConfirmPendingRef.current;
+            if (!pending) {
+                return;
             }
-            return null;
-        });
-        maybeDownloadPipelinePngsForDebug(pending.sketchBlob, pending.colorHintsBlob);
-        await startGeneration(pending);
-    }, []);
+            generateConfirmPendingRef.current = null;
+            setGenerateConfirmOpen(false);
+            setGenerateConfirmShowDefaultColor(false);
+            setGenerateConfirmDetectedGarment(null);
+            setGenerateConfirmPreviewUrl((prev) => {
+                if (prev) {
+                    URL.revokeObjectURL(prev);
+                }
+                return null;
+            });
+            maybeDownloadPipelinePngsForDebug(pending.sketchBlob, pending.colorHintsBlob);
+            await startGeneration({
+                ...pending,
+                generationCategoryId: category.generationCategoryId,
+                garmentLabel: category.garmentLabel,
+            });
+        },
+        []
+    );
 
     const handleGenerate = async () => {
         if (!editor || isGenerating) return;
@@ -552,13 +696,13 @@ export default function DesignerCanvas() {
         }
 
         const hasColorHints = hasColorHintShapes(editor);
-        if (!hasColorHints) {
+        if (!hasColorHints && !user) {
             setCanvasToast(NO_COLOR_HINTS_TOAST_MESSAGE);
         }
 
         const previewBlob = (await exportCombinedSketchPreviewBlob(editor)) ?? sketchBlob;
 
-        const payload = {
+        const payload: GenerationPayload = {
             sketchBlob,
             colorHintsBlob,
             previewBlob,
@@ -566,6 +710,7 @@ export default function DesignerCanvas() {
 
         if (user) {
             generateConfirmPendingRef.current = payload;
+            setGenerateConfirmDetectedGarment(getActiveTemplateGarment(editor));
             setGenerateConfirmShowDefaultColor(!hasColorHints);
             setGenerateConfirmPreviewUrl(URL.createObjectURL(previewBlob));
             setGenerateConfirmOpen(true);
@@ -580,66 +725,18 @@ export default function DesignerCanvas() {
         <DrawingModeProvider>
             <GenerateFlowProvider value={generateFlowValue}>
                 <div className="relative h-full w-full bg-white">
-                    {canvasToast && (
-                        <div role="alert" className={`${TOAST_OUTER_CLASS} bottom-24`}>
-                            <div className="flex items-start justify-between gap-3">
-                                <p className="text-sm leading-snug text-gray-700">{canvasToast}</p>
-                                <button
-                                    type="button"
-                                    onClick={() => setCanvasToast(null)}
-                                    className="shrink-0 text-xs font-medium text-purple-600 transition-colors hover:text-purple-800"
-                                    aria-label="Dismiss notification"
-                                >
-                                    Dismiss
-                                </button>
-                            </div>
-                        </div>
-                    )}
-                    {importToast && (
-                        <div role="alert" className={`${TOAST_OUTER_CLASS} bottom-40`}>
-                            <div className="flex items-start justify-between gap-3">
-                                <p className="text-sm leading-snug text-gray-700">{importToast}</p>
-                                <button
-                                    type="button"
-                                    onClick={() => setImportToast(null)}
-                                    className="shrink-0 text-xs font-medium text-purple-600 transition-colors hover:text-purple-800"
-                                    aria-label="Dismiss import notification"
-                                >
-                                    Dismiss
-                                </button>
-                            </div>
-                        </div>
-                    )}
-                    {draftSaveToast && (
-                        <div
-                            role="alert"
-                            className={`${TOAST_OUTER_CLASS} bottom-56 border-red-200/90 bg-red-50/95 ring-red-500/10`}
-                        >
-                            <div className="flex items-start justify-between gap-3">
-                                <p className="text-sm leading-snug text-red-800">{draftSaveToast}</p>
-                                <div className="flex shrink-0 flex-col items-end gap-1">
-                                    <button
-                                        type="button"
-                                        onClick={() => void saveDraft()}
-                                        className="text-xs font-semibold text-red-700 transition-colors hover:text-red-900"
-                                    >
-                                        Retry save
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={() => {
-                                            setDraftSaveToast(null);
-                                            clearSaveError();
-                                        }}
-                                        className="text-xs font-medium text-red-600 transition-colors hover:text-red-800"
-                                        aria-label="Dismiss autosave warning"
-                                    >
-                                        Dismiss
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    )}
+                    <DesignerToastStack
+                        canvasToast={canvasToast}
+                        onDismissCanvasToast={() => setCanvasToast(null)}
+                        importToast={importToast}
+                        onDismissImportToast={() => setImportToast(null)}
+                        draftSaveToast={draftSaveToast}
+                        onRetryDraftSave={() => void saveDraft()}
+                        onDismissDraftSaveToast={() => {
+                            setDraftSaveToast(null);
+                            clearSaveError();
+                        }}
+                    />
                     {showCanvasGuide && (
                         <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10001 pointer-events-auto">
                             <div className="rounded-xl border border-purple-200 bg-white/95 px-4 py-3 shadow-lg backdrop-blur-sm">
@@ -665,9 +762,10 @@ export default function DesignerCanvas() {
                         open={generateConfirmOpen}
                         previewUrl={generateConfirmPreviewUrl}
                         showDefaultColorNote={generateConfirmShowDefaultColor}
+                        detectedGarment={generateConfirmDetectedGarment}
                         onBack={closeGenerateConfirm}
-                        onContinue={() => {
-                            void handleGenerateConfirmContinue();
+                        onContinue={(category) => {
+                            void handleGenerateConfirmContinue(category);
                         }}
                     />
 

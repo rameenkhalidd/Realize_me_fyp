@@ -1,17 +1,25 @@
 'use client';
 
-import { useDrawingMode } from '@/components/tldraw/DrawingModeContext';
+import { useEffect, useRef, useState } from 'react';
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
+
+import { useDrawingMode, type DrawingMode } from '@/components/tldraw/DrawingModeContext';
 
 type ModeSwitchRowProps = {
     label: string;
     checked: boolean;
     disabled?: boolean;
+    flash?: boolean;
     onChange: (checked: boolean) => void;
 };
 
-function ModeSwitchRow({ label, checked, disabled, onChange }: ModeSwitchRowProps) {
+function ModeSwitchRow({ label, checked, disabled, flash, onChange }: ModeSwitchRowProps) {
     return (
-        <div className="flex items-center justify-between gap-2">
+        <div
+            className={`-mx-1 flex items-center justify-between gap-2 rounded-md px-1 transition-colors duration-300 ${
+                flash ? 'bg-violet-50 ring-1 ring-violet-200/80' : ''
+            }`}
+        >
             <span className="text-xs font-medium text-gray-800">{label}</span>
             <button
                 type="button"
@@ -34,12 +42,39 @@ function ModeSwitchRow({ label, checked, disabled, onChange }: ModeSwitchRowProp
     );
 }
 
+const HELPER_COPY: Record<DrawingMode, string> = {
+    outline: 'Draw the garment shape in black or grey.',
+    'color-hint': 'Add colored strokes where you want fabric color.',
+};
+
 type DrawingModeSwitchProps = {
     disabled?: boolean;
 };
 
 export default function DrawingModeSwitch({ disabled }: DrawingModeSwitchProps) {
     const { mode, setMode, isDesignerWorkspace } = useDrawingMode();
+    const reduceMotion = useReducedMotion();
+    const prevModeRef = useRef<DrawingMode | null>(null);
+    const [flashMode, setFlashMode] = useState<DrawingMode | null>(null);
+
+    useEffect(() => {
+        if (prevModeRef.current === mode) {
+            return;
+        }
+
+        const previousMode = prevModeRef.current;
+        prevModeRef.current = mode;
+
+        if (previousMode === null || reduceMotion) {
+            return;
+        }
+
+        setFlashMode(mode);
+        const id = window.setTimeout(() => setFlashMode(null), 300);
+        return () => window.clearTimeout(id);
+        // reduceMotion read intentionally without dep — flash only on mode change, not hydration
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [mode]);
 
     if (!isDesignerWorkspace) {
         return null;
@@ -57,6 +92,7 @@ export default function DrawingModeSwitch({ disabled }: DrawingModeSwitchProps) 
                     label="Outline"
                     checked={mode === 'outline'}
                     disabled={disabled}
+                    flash={flashMode === 'outline'}
                     onChange={(on) => {
                         if (on) setMode('outline');
                     }}
@@ -66,17 +102,27 @@ export default function DrawingModeSwitch({ disabled }: DrawingModeSwitchProps) 
                     label="Color hints"
                     checked={mode === 'color-hint'}
                     disabled={disabled}
+                    flash={flashMode === 'color-hint'}
                     onChange={(on) => {
                         if (on) setMode('color-hint');
                     }}
                 />
             </div>
 
-            <p className="h-8 text-[10px] leading-snug text-gray-500">
-                {mode === 'outline'
-                    ? 'Draw the garment shape in black or grey.'
-                    : 'Add colored strokes where you want fabric color.'}
-            </p>
+            <div className="h-8 overflow-hidden">
+                <AnimatePresence mode="wait" initial={false}>
+                    <motion.p
+                        key={mode}
+                        className="text-[10px] leading-snug text-gray-500"
+                        initial={reduceMotion ? false : { opacity: 0, y: 4 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -4 }}
+                        transition={{ duration: reduceMotion ? 0 : 0.2 }}
+                    >
+                        {HELPER_COPY[mode]}
+                    </motion.p>
+                </AnimatePresence>
+            </div>
         </div>
     );
 }

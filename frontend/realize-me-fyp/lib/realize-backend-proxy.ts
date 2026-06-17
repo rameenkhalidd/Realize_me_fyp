@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyBearerIdTokenFromRequest } from '@/lib/firebase/admin';
 
+/** Slightly under client draft save timeout so the proxy fails first with 502. */
+const PROXY_TIMEOUT_MS = 20_000;
+
 export function getRealizeBackendBaseUrl(): string | null {
     const base = process.env.REALIZEME_BACKEND_URL?.replace(/\/$/, '');
     return base || null;
@@ -22,7 +25,11 @@ export async function forwardToRealizeBackend(
     if (auth) {
         headers.set('Authorization', auth);
     }
-    return fetch(url, { ...init, headers });
+    return fetch(url, {
+        ...init,
+        headers,
+        signal: AbortSignal.timeout(PROXY_TIMEOUT_MS),
+    });
 }
 
 export async function proxyJsonWithAuth(

@@ -16,6 +16,8 @@ type ParsedMultipart = {
     previewFile: File | null;
     previewDataUrl: string;
     sketch_json: string | null;
+    generationCategoryId: string | null;
+    garmentLabel: string | null;
 };
 
 type ParsedJson = {
@@ -57,6 +59,8 @@ async function parseSketchRequest(req: NextRequest): Promise<ParsedMultipart | P
 
         const sketch_json = typeof sketchField === 'string' ? sketchField : null;
         const previewBuffer = await previewSource.arrayBuffer();
+        const generationCategoryField = formData.get('generation_category_id');
+        const garmentLabelField = formData.get('garment_label');
 
         return {
             sketchFile,
@@ -64,6 +68,14 @@ async function parseSketchRequest(req: NextRequest): Promise<ParsedMultipart | P
             previewFile,
             previewDataUrl: toDataUrl(previewBuffer, previewSource.type || 'image/png'),
             sketch_json,
+            generationCategoryId:
+                typeof generationCategoryField === 'string' && generationCategoryField.trim()
+                    ? generationCategoryField.trim()
+                    : null,
+            garmentLabel:
+                typeof garmentLabelField === 'string' && garmentLabelField.trim()
+                    ? garmentLabelField.trim()
+                    : null,
         };
     }
 
@@ -84,7 +96,9 @@ async function proxySessionGenerate(
     colorHintsFile: File | null,
     previewFile: File | null,
     sketchJson: string | null,
-    authHeader: string
+    authHeader: string,
+    generationCategoryId: string | null,
+    garmentLabel: string | null
 ) {
     const backendForm = new FormData();
     backendForm.append('file', sketchFile, sketchFile.name || 'sketch.png');
@@ -97,6 +111,12 @@ async function proxySessionGenerate(
     }
     if (sketchJson) {
         backendForm.append('sketch_json', sketchJson);
+    }
+    if (generationCategoryId) {
+        backendForm.append('generation_category_id', generationCategoryId);
+    }
+    if (garmentLabel) {
+        backendForm.append('garment_label', garmentLabel);
     }
 
     return fetch(`${BACKEND_BASE_URL}/api/generate`, {
@@ -213,7 +233,9 @@ export async function POST(req: NextRequest) {
                     parsedRequest.colorHintsFile,
                     parsedRequest.previewFile,
                     parsedRequest.sketch_json,
-                    authHeader
+                    authHeader,
+                    parsedRequest.generationCategoryId,
+                    parsedRequest.garmentLabel
                 );
                 if (sessionRes.ok) {
                     const proxied = await sessionRes.json();

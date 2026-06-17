@@ -13,7 +13,12 @@ export function mapFirebaseAuthError(error: unknown): string {
             case 'auth/user-not-found':
                 return 'No account found with that email. Check the address or sign up.';
             case 'auth/wrong-password':
-                return 'Incorrect password. Try again or reset your password in the Firebase console.';
+            case 'auth/invalid-credential':
+                return 'Incorrect password. Try again or send yourself a reset link.';
+            case 'auth/requires-recent-login':
+                return 'For security, sign out and sign in again, then retry this change.';
+            case 'auth/missing-password':
+                return 'Enter your current password to continue.';
             case 'auth/invalid-credential':
             case 'auth/invalid-login-credentials':
                 return 'Email or password is incorrect. Try again.';

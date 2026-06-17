@@ -5,16 +5,19 @@ import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { ArrowLeft, ArrowRight, Eye, EyeOff } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Eye, EyeOff, FolderOpen, History, Pencil } from 'lucide-react';
 
 import { useAuth } from '@/components/auth/AuthProvider';
 import { BrandLogo } from '@/components/BrandLogo';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { loginSchema, type LoginFormValues } from '@/lib/auth-schemas';
+import { loginSchema, forgotPasswordSchema, type LoginFormValues } from '@/lib/auth-schemas';
 import { mapFirebaseAuthError } from '@/lib/map-firebase-auth-error';
 import { safeRelativeNextPath } from '@/lib/safe-next-path';
+import { DESIGNER_LAVENDER_PAGE_BACKGROUND } from '@/lib/designer-page-background';
+import { INTERACTIVE_BUTTON_MOTION } from '@/lib/interactive-button-motion';
+
+const authBackLinkClass = `absolute left-4 top-4 inline-flex items-center gap-2 rounded-xl border border-violet-200/90 bg-white/95 px-3.5 py-2 text-sm font-semibold text-violet-900 shadow-sm backdrop-blur-sm hover:border-violet-300 hover:bg-violet-50/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/40 sm:left-6 sm:top-6 ${INTERACTIVE_BUTTON_MOTION}`;
 
 const fieldClass =
     'mt-1.5 flex h-11 w-full rounded-xl border border-gray-300 bg-white px-3 text-sm text-gray-900 placeholder:text-gray-400 focus:border-purple-500 focus:outline-none focus:ring-2 focus:ring-purple-500/20';
@@ -23,6 +26,9 @@ const fieldErrorClass = 'mt-1 text-sm text-red-600';
 const signedInNoticeClass =
     'fixed left-1/2 top-4 z-50 w-[min(calc(100vw-2rem),34rem)] -translate-x-1/2 rounded-xl border border-purple-200/90 bg-white/95 px-4 py-3 text-center text-sm text-gray-700 shadow-md backdrop-blur-sm ring-1 ring-violet-500/10';
 
+const resetToastClass =
+    'fixed bottom-6 right-6 z-50 w-[min(calc(100vw-2rem),20rem)] rounded-xl border border-purple-200/90 bg-white/95 px-4 py-3 text-sm text-gray-700 shadow-md backdrop-blur-sm ring-1 ring-violet-500/10';
+
 function fieldRing(invalid: boolean) {
     return invalid ? 'border-red-400 focus:border-red-500 focus:ring-red-500/20' : '';
 }
@@ -30,7 +36,7 @@ function fieldRing(invalid: boolean) {
 function LoginForm() {
     const router = useRouter();
     const searchParams = useSearchParams();
-    const { user, loading: authLoading, configured, signInWithEmail, signInWithGoogle } = useAuth();
+    const { user, loading: authLoading, configured, signInWithEmail, signInWithGoogle, sendPasswordResetEmail } = useAuth();
     const formId = useId();
     const emailErrorId = `${formId}-email-error`;
     const passwordErrorId = `${formId}-password-error`;
@@ -39,10 +45,14 @@ function LoginForm() {
     const [showPassword, setShowPassword] = useState(false);
     const [formError, setFormError] = useState<string | null>(null);
     const [googlePending, setGooglePending] = useState(false);
+    const [forgotMessage, setForgotMessage] = useState<string | null>(null);
+    const [resetToast, setResetToast] = useState<string | null>(null);
+    const [resetPending, setResetPending] = useState(false);
 
     const {
         register,
         handleSubmit,
+        getValues,
         formState: { errors, isSubmitting },
     } = useForm<LoginFormValues>({
         resolver: zodResolver(loginSchema),
@@ -52,6 +62,14 @@ function LoginForm() {
     const nextParam = searchParams.get('next');
     const authQuerySuffix = searchParams.toString() ? `?${searchParams.toString()}` : '';
     const showSignedInNotice = configured && !authLoading && Boolean(user);
+
+    useEffect(() => {
+        if (!resetToast) {
+            return;
+        }
+        const id = window.setTimeout(() => setResetToast(null), 3000);
+        return () => window.clearTimeout(id);
+    }, [resetToast]);
 
     useEffect(() => {
         if (authLoading || !user) {
@@ -72,6 +90,7 @@ function LoginForm() {
 
     const onGoogle = async () => {
         setFormError(null);
+        setForgotMessage(null);
         setGooglePending(true);
         try {
             await signInWithGoogle();
@@ -83,15 +102,37 @@ function LoginForm() {
         }
     };
 
-    const busy = isSubmitting || googlePending;
+    const onForgotPassword = async () => {
+        setForgotMessage(null);
+        setFormError(null);
+        const email = getValues('email').trim();
+        const parsed = forgotPasswordSchema.safeParse({ email });
+        if (!parsed.success) {
+            setForgotMessage('Enter your email above first, then we can send a reset link.');
+            return;
+        }
+
+        setResetPending(true);
+        const result = await sendPasswordResetEmail(parsed.data.email);
+        setResetPending(false);
+
+        if (!result.success) {
+            setForgotMessage(result.error ?? 'Could not send reset email.');
+            return;
+        }
+
+        setResetToast('Reset link sent — check your inbox.');
+    };
+
+    const busy = isSubmitting || googlePending || resetPending;
     const disableActions = !configured || busy || (authLoading && configured);
 
     return (
-        <main className="relative flex min-h-dvh flex-col items-center justify-center bg-linear-to-br from-purple-50 via-white to-cyan-50 px-4 py-10 font-roboto">
-            <Link
-                href="/"
-                className="absolute left-4 top-4 inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white/90 px-3 py-2 text-sm font-medium text-gray-700 shadow-sm backdrop-blur-sm transition hover:bg-white sm:left-6 sm:top-6"
-            >
+        <main
+            className="relative flex min-h-dvh flex-col items-center justify-center px-4 py-10 font-roboto"
+            style={{ background: DESIGNER_LAVENDER_PAGE_BACKGROUND }}
+        >
+            <Link href="/" className={authBackLinkClass}>
                 <ArrowLeft size={16} aria-hidden />
                 Back
             </Link>
@@ -100,21 +141,38 @@ function LoginForm() {
                     You&apos;re already signed in - opening your workspace...
                 </div>
             ) : null}
+            {resetToast ? (
+                <div className={resetToastClass} role="status" aria-live="polite">
+                    {resetToast}
+                </div>
+            ) : null}
             <Card className="mx-auto flex w-full max-w-5xl overflow-hidden rounded-3xl border-gray-200 py-0 shadow-2xl">
-                <section className="hidden w-1/2 bg-linear-to-br from-[#8B5CF6] via-[#D946EF] to-[#06B6D4] p-10 text-white lg:flex lg:flex-col lg:justify-between">
-                    <div>
+                <section className="hidden w-1/2 bg-linear-to-br from-[#8B5CF6] via-[#D946EF] to-[#06B6D4] p-10 text-white lg:flex lg:flex-col">
+                    <div className="max-w-sm">
                         <BrandLogo theme="dark" className="mb-6" />
                         <h1 className="font-raleway text-3xl font-bold leading-tight">Welcome back</h1>
                         <p className="mt-4 text-sm text-white/90">
-                            Continue your design journey and turn more sketches into real fashion looks.
+                            Pick up your canvas and continue where you left off.
                         </p>
+                        <ul className="mt-6 space-y-3 text-sm text-white/80">
+                            <li className="flex items-start gap-2.5">
+                                <FolderOpen className="mt-0.5 h-4 w-4 shrink-0 text-white/70" aria-hidden />
+                                Access the saved draft
+                            </li>
+                            <li className="flex items-start gap-2.5">
+                                <Pencil className="mt-0.5 h-4 w-4 shrink-0 text-white/70" aria-hidden />
+                                Continue sketching
+                            </li>
+                            <li className="flex items-start gap-2.5">
+                                <History className="mt-0.5 h-4 w-4 shrink-0 text-white/70" aria-hidden />
+                                Browse your design history
+                            </li>
+                        </ul>
                     </div>
-                    <p className="text-xs text-white/80">No account yet? Create one in a few seconds.</p>
                 </section>
 
                 <section className="w-full p-6 sm:p-10 lg:w-1/2">
                     <div className="mx-auto max-w-sm">
-                        <Badge className="border-purple-200 bg-purple-50 text-purple-700">Account Access</Badge>
                         <h2 className="font-raleway text-3xl font-bold text-gray-900">Log in</h2>
                         <p className="mt-2 text-sm text-gray-500">Access your workspace and continue designing.</p>
 
@@ -138,7 +196,7 @@ function LoginForm() {
                             >
                                 {googlePending ? 'Opening Google…' : 'Continue with Google'}
                             </Button>
-                            <div className="relative flex items-center justify-center py-1">
+                            <div className="relative flex items-center justify-center py-2">
                                 <div className="absolute inset-x-0 top-1/2 h-px bg-gray-200" aria-hidden />
                                 <span className="relative bg-white px-2 text-xs font-medium uppercase tracking-wide text-gray-500">
                                     or use email
@@ -146,7 +204,7 @@ function LoginForm() {
                             </div>
                         </div>
 
-                        <form className="mt-2 space-y-4" onSubmit={onSubmit} noValidate>
+                        <form className="mt-4 space-y-5" onSubmit={onSubmit} noValidate>
                             {formError ? (
                                 <div
                                     id={formErrorId}
@@ -214,6 +272,21 @@ function LoginForm() {
                                         {errors.password.message}
                                     </p>
                                 ) : null}
+                                <div className="mt-2 flex flex-col items-start gap-1">
+                                    <button
+                                        type="button"
+                                        onClick={() => void onForgotPassword()}
+                                        disabled={disableActions}
+                                        className="text-xs font-medium text-violet-600 underline-offset-2 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-400"
+                                    >
+                                        {resetPending ? 'Sending reset link…' : 'Forgot password?'}
+                                    </button>
+                                    {forgotMessage ? (
+                                        <p className="text-xs text-red-600" role="alert">
+                                            {forgotMessage}
+                                        </p>
+                                    ) : null}
+                                </div>
                             </div>
 
                             <Button
@@ -250,7 +323,10 @@ function LoginForm() {
 
 function LoginFallback() {
     return (
-        <main className="flex min-h-dvh flex-col items-center justify-center bg-linear-to-br from-purple-50 via-white to-cyan-50 px-4 py-10 font-roboto">
+        <main
+            className="flex min-h-dvh flex-col items-center justify-center px-4 py-10 font-roboto"
+            style={{ background: DESIGNER_LAVENDER_PAGE_BACKGROUND }}
+        >
             <Card className="mx-auto w-full max-w-md rounded-3xl border-gray-200 p-10 text-center shadow-xl">
                 <p className="text-sm text-gray-600">Loading…</p>
             </Card>

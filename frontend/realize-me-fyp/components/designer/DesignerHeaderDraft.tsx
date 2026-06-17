@@ -1,30 +1,43 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import { usePathname } from 'next/navigation';
 import { AlertCircle, CheckCircle2, Cloud, Loader2, Save } from 'lucide-react';
 
 import { useDesignerDraftOptional } from '@/components/designer/DesignerDraftContext';
 import { DRAFT_AUTOSAVE_ERROR_MESSAGE } from '@/hooks/useDraftAutosave';
 
+const SAVING_SLOW_MS = 30_000;
+
 /** Draft status + save control for the designer header (design canvas route only). */
 export default function DesignerHeaderDraft() {
     const pathname = usePathname();
     const draft = useDesignerDraftOptional();
+    const isSaving = draft?.status === 'saving';
+    const [savingSlow, setSavingSlow] = useState(false);
+
+    useEffect(() => {
+        if (!isSaving) {
+            setSavingSlow(false);
+            return;
+        }
+        const id = window.setTimeout(() => setSavingSlow(true), SAVING_SLOW_MS);
+        return () => window.clearTimeout(id);
+    }, [isSaving]);
 
     if (!draft?.visible || pathname !== '/designer') {
         return null;
     }
 
-    const { status, lastSavedAt, saveDisabled, saveDraft } = draft;
-    const isSaving = status === 'saving';
+    const { status, lastSavedAt, saveDisabled, saveDraft, saveErrorMessage } = draft;
     const isError = status === 'error';
 
     let StatusIcon = Cloud;
     let statusLine = 'Autosaves to your account';
 
-    if (isSaving) {
+    if (status === 'saving') {
         StatusIcon = Loader2;
-        statusLine = 'Saving…';
+        statusLine = savingSlow ? 'Save taking longer than usual…' : 'Saving…';
     } else if (isError) {
         StatusIcon = AlertCircle;
         statusLine = 'Autosave failed — tap Save';
@@ -41,11 +54,17 @@ export default function DesignerHeaderDraft() {
             <div
                 className={`min-w-0 items-center gap-1.5 flex ${isError ? '' : 'hidden sm:flex'}`}
                 aria-live="polite"
-                title={isError ? DRAFT_AUTOSAVE_ERROR_MESSAGE : undefined}
+                title={
+                    isError
+                        ? (saveErrorMessage ?? DRAFT_AUTOSAVE_ERROR_MESSAGE)
+                        : savingSlow
+                          ? 'Still trying to save — you can wait or refresh the page'
+                          : undefined
+                }
             >
                 <StatusIcon
                     className={`h-3.5 w-3.5 shrink-0 ${
-                        isSaving
+                        status === 'saving'
                             ? 'animate-spin text-violet-600'
                             : isError
                               ? 'text-red-500'
@@ -56,7 +75,7 @@ export default function DesignerHeaderDraft() {
                     aria-hidden
                 />
                 <span
-                    className={`max-w-[9rem] truncate text-xs md:max-w-[11rem] ${
+                    className={`max-w-[9rem] truncate text-xs md:max-w-[13rem] ${
                         isError ? 'font-medium text-red-700' : 'text-slate-600'
                     }`}
                 >

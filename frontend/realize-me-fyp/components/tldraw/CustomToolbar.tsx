@@ -22,10 +22,14 @@ import {
     Star,
     Cloud,
     Heart,
+    ImageOff,
 } from 'lucide-react';
+
+import { getTemplateShapeIds, removeTemplateShapes } from '@/lib/tldraw-utils';
 
 import { useGenerateFlow } from './GenerateFlowContext';
 import CanvasZoomBar from './CanvasZoomBar';
+import ToolbarTooltip from './ToolbarTooltip';
 
 type AllowedGeoShape =
     | 'rectangle'
@@ -91,7 +95,7 @@ function ShapePreview({ shape }: { shape: AllowedGeoShape | 'line' }) {
 }
 
 export default function CustomToolbar() {
-    const { isGenerating, notifyEmptyCanvas } = useGenerateFlow();
+    const { isGenerating, notifyEmptyCanvas, notifyCanvasMessage } = useGenerateFlow();
     const editor = useEditor();
     const [isShapeMenuOpen, setIsShapeMenuOpen] = useState(false);
     const [activeGeoShape, setActiveGeoShape] = useState<AllowedGeoShape>('rectangle');
@@ -115,6 +119,11 @@ export default function CustomToolbar() {
         () => ((editor ? Array.from(editor.getCurrentPageShapeIds()).length : 0) > 0),
         [editor]
     );
+    const hasTemplateShapes = useValue(
+        'has template shapes',
+        () => (editor ? getTemplateShapeIds(editor).length > 0 : false),
+        [editor]
+    );
 
     if (!editor) return null;
 
@@ -136,6 +145,12 @@ export default function CustomToolbar() {
         const selectedIds = editor.getSelectedShapeIds();
         if (selectedIds.length > 0) {
             editor.deleteShapes(selectedIds);
+        }
+    };
+
+    const handleRemoveTemplate = () => {
+        if (removeTemplateShapes(editor)) {
+            notifyCanvasMessage('Template removed. Press Ctrl+Z to bring it back.');
         }
     };
 
@@ -163,6 +178,9 @@ export default function CustomToolbar() {
         'bg-white text-gray-600 hover:bg-gray-50 border border-realize hover:text-realize shadow-sm transition-all duration-200';
 
     const disabledBtn = 'disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-white disabled:hover:text-gray-600';
+
+    const removeGuideBtn =
+        'bg-violet-50 text-violet-700 border border-violet-200/80 shadow-sm hover:bg-violet-100 hover:text-violet-800 hover:border-violet-300/90 active:bg-violet-100/90 transition-all duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-400 focus-visible:ring-offset-2';
 
     return (
         <div
@@ -259,6 +277,23 @@ export default function CustomToolbar() {
             >
                 <Trash2 size={20} />
             </button>
+
+            {hasTemplateShapes && (
+                <ToolbarTooltip
+                    label="Remove template"
+                    detail="Removes the tracing guide"
+                    detailLine2="Keeps your strokes"
+                >
+                    <button
+                        type="button"
+                        onClick={handleRemoveTemplate}
+                        className={`p-3 rounded-xl ${removeGuideBtn}`}
+                        aria-label="Remove template — removes the tracing guide, keeps your strokes"
+                    >
+                        <ImageOff size={20} />
+                    </button>
+                </ToolbarTooltip>
+            )}
 
             <div className="w-[1px] h-8 bg-realize mx-2 shrink-0" />
 

@@ -13,6 +13,12 @@ export function getDesignerPageTitle(pathname: string): string {
     if (pathname.startsWith('/designer/history')) {
         return 'My work';
     }
+    if (pathname.startsWith('/designer/templates')) {
+        return 'Templates';
+    }
+    if (pathname.startsWith('/designer/account')) {
+        return 'Account';
+    }
     if (pathname === '/designer') {
         return 'Canvas';
     }

@@ -2,6 +2,11 @@
 import { Box, Editor, type TLShapeId, TLStoreSnapshot, type VecLike } from 'tldraw';
 
 import { hasColorHintShapes, hasOutlineShapes, partitionShapeIds } from '@/lib/canvas-export';
+import {
+    findTemplateBySrcOrName,
+    TEMPLATES,
+    type TemplateItem,
+} from '@/components/designer/templates';
 
 export const EXPORT_PADDING = 20;
 const EXPORT_SCALE = 2;
@@ -48,7 +53,10 @@ export function getImagePlacementPoint(editor: Editor): VecLike {
     return editor.getViewportPageBounds().center;
 }
 
-/** Zoom and pan the camera to fit all page shapes. */
+/**
+ * Fit all page shapes in view. Zooms out when the sketch is larger than the viewport;
+ * never zooms in past 100% when the sketch already fits at default scale.
+ */
 export function fitCameraToSketch(editor: Editor, options?: { animate?: boolean }) {
     const bounds = getAllShapesPageBounds(editor);
     if (!bounds) {
@@ -57,6 +65,7 @@ export function fitCameraToSketch(editor: Editor, options?: { animate?: boolean 
 
     editor.zoomToBounds(bounds, {
         inset: FIT_TO_SKETCH_INSET,
+        targetZoom: 1,
         animation: options?.animate ? { duration: 200 } : undefined,
     });
     return true;
@@ -140,7 +149,8 @@ export function scheduleFitCameraToSketch(editor: Editor, options?: { animate?: 
 
         applyFit();
 
-        return relaxed || editor.getZoomLevel() <= MAX_COMFORTABLE_FIT_ZOOM;
+        // Relaxed mode only eases bounds-stability requirements — never accept excessive zoom.
+        return editor.getZoomLevel() <= MAX_COMFORTABLE_FIT_ZOOM;
     };
 
     const waitForStableFit = (maxFrames: number) => {
@@ -200,13 +210,133 @@ export function resetCameraToDefault(editor: Editor) {
     editor.resetZoom(editor.getViewportScreenCenter(), { force: true });
 }
 
-/** Remove every shape on the current page and return to 100% zoom. */
-export function clearAllCanvasShapes(editor: Editor) {
+/** Set `isLocked: false` on every locked shape in the list (deleteShapes silently skips locked shapes). */
+function unlockShapes(editor: Editor, shapeIds: TLShapeId[]) {
+    const lockedUpdates = shapeIds.flatMap((id) => {
+        const shape = editor.getShape(id);
+        return shape?.isLocked ? [{ id, type: shape.type, isLocked: false }] : [];
+    });
+    if (lockedUpdates.length > 0) {
+        editor.updateShapes(lockedUpdates);
+    }
+}
+
+/**
+ * Remove every shape on the current page and return to 100% zoom.
+ * Locked shapes (e.g. template tracing guides) are unlocked first so they are actually deleted.
+ */
+export function clearAllCanvasShapes(editor: Editor, options?: { resetCamera?: boolean }) {
     const shapeIds = Array.from(editor.getCurrentPageShapeIds());
     if (shapeIds.length > 0) {
-        editor.deleteShapes(shapeIds);
+        editor.run(() => {
+            unlockShapes(editor, shapeIds);
+            editor.deleteShapes(shapeIds);
+        });
     }
-    resetCameraToDefault(editor);
+    if (options?.resetCamera !== false) {
+        resetCameraToDefault(editor);
+    }
+}
+
+/** Shapes placed from the Templates page (tagged with `meta.isTemplate` on placement). */
+export function getTemplateShapeIds(editor: Editor): TLShapeId[] {
+    return Array.from(editor.getCurrentPageShapeIds()).filter(
+        (id) => editor.getShape(id)?.meta?.isTemplate === true
+    );
+}
+
+export type ActiveTemplateGarment = {
+    templateId: string;
+    garmentLabel: string;
+    generationCategoryId: string;
+};
+
+function resolveCatalogTemplateFromMeta(meta: Record<string, unknown>): TemplateItem | undefined {
+    const catalogId = meta.templateId;
+    if (typeof catalogId === 'string' && catalogId) {
+        const byId = TEMPLATES.find((template) => template.id === catalogId);
+        if (byId) {
+            return byId;
+        }
+    }
+
+    const templateName = meta.templateName;
+    const src = meta.templateSrc ?? meta.src;
+    if (typeof src === 'string' && typeof templateName === 'string') {
+        const bySrcOrName = findTemplateBySrcOrName(src, templateName);
+        if (bySrcOrName) {
+            return bySrcOrName;
+        }
+    }
+
+    if (typeof templateName === 'string' && templateName) {
+        const byName = TEMPLATES.find((template) => template.name === templateName);
+        if (byName) {
+            return byName;
+        }
+    }
+
+    if (typeof src === 'string' && src) {
+        return TEMPLATES.find((template) => template.src === src);
+    }
+
+    return undefined;
+}
+
+/** Live garment metadata from the template shape still on the canvas, if any. */
+export function getActiveTemplateGarment(editor: Editor): ActiveTemplateGarment | null {
+    const templateIds = getTemplateShapeIds(editor);
+    if (templateIds.length === 0) {
+        return null;
+    }
+
+    const shape = editor.getShape(templateIds[0]);
+    if (!shape?.meta) {
+        return null;
+    }
+
+    const meta = shape.meta as Record<string, unknown>;
+    const templateId = meta.templateId;
+    const garmentLabel = meta.garmentLabel;
+    const generationCategoryId = meta.generationCategoryId;
+
+    if (
+        typeof templateId === 'string' &&
+        typeof garmentLabel === 'string' &&
+        typeof generationCategoryId === 'string' &&
+        templateId &&
+        garmentLabel &&
+        generationCategoryId
+    ) {
+        return { templateId, garmentLabel, generationCategoryId };
+    }
+
+    const catalogTemplate = resolveCatalogTemplateFromMeta(meta);
+    if (!catalogTemplate) {
+        return null;
+    }
+
+    return {
+        templateId: catalogTemplate.id,
+        garmentLabel: catalogTemplate.garmentLabel,
+        generationCategoryId: catalogTemplate.generationCategoryId,
+    };
+}
+
+/**
+ * Delete the template tracing guide(s), keeping the user's strokes.
+ * Unlock + delete run as one history entry, so a single Ctrl+Z brings the template back.
+ */
+export function removeTemplateShapes(editor: Editor): boolean {
+    const templateIds = getTemplateShapeIds(editor);
+    if (templateIds.length === 0) {
+        return false;
+    }
+    editor.run(() => {
+        unlockShapes(editor, templateIds);
+        editor.deleteShapes(templateIds);
+    });
+    return true;
 }
 
 /**
@@ -540,4 +670,21 @@ export function loadEditorSnapshot(editor: Editor, snapshot: TLStoreSnapshot) {
     } catch (error) {
         console.error('Failed to load snapshot:', error);
     }
+}
+
+/** True when a persisted tldraw snapshot contains at least one shape record. */
+export function snapshotHasShapes(snapshot: unknown): boolean {
+    if (!snapshot || typeof snapshot !== 'object') {
+        return false;
+    }
+    const store = (snapshot as { store?: unknown }).store;
+    if (!store || typeof store !== 'object') {
+        return false;
+    }
+    return Object.values(store as Record<string, unknown>).some(
+        (record) =>
+            record !== null &&
+            typeof record === 'object' &&
+            (record as { typeName?: string }).typeName === 'shape'
+    );
 }

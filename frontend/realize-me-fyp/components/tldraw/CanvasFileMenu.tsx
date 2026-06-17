@@ -175,25 +175,25 @@ export default function CanvasFileMenu() {
 
     return (
         <div ref={rootRef} className="absolute top-4 left-4 z-[9999] pointer-events-auto select-none">
-            <div className="relative rounded-xl border border-gray-200 bg-white/90 backdrop-blur-sm shadow-lg p-1.5">
-                <div className="flex items-center gap-1">
+            <div className="relative rounded-lg border border-gray-200 bg-white/90 backdrop-blur-sm shadow-lg p-1">
+                <div className="flex items-center gap-0.5">
                     <button
                         onClick={handleUpload}
-                        className="min-w-[56px] h-12 px-2 rounded-lg border border-gray-200 bg-white text-gray-700 shadow-sm hover:bg-gray-50 transition-colors inline-flex flex-col items-center justify-center gap-0.5"
+                        className="min-w-[48px] h-10 px-1.5 rounded-md border border-gray-200 bg-white text-gray-700 shadow-sm hover:bg-gray-50 transition-colors inline-flex flex-col items-center justify-center gap-0.5"
                         title="Import"
                         aria-label="Import"
                     >
-                        <FolderInput size={18} aria-hidden />
-                        <span className="text-[10px] font-medium leading-none">Import</span>
+                        <FolderInput size={16} aria-hidden />
+                        <span className="text-[9px] font-medium leading-none">Import</span>
                     </button>
                     <button
                         onClick={() => setExportOpen((open) => !open)}
-                        className={`min-w-[56px] h-12 px-2 rounded-lg border border-gray-200 bg-white text-gray-700 shadow-sm hover:bg-gray-50 transition-colors inline-flex flex-col items-center justify-center gap-0.5 ${exportOpen ? 'ring-2 ring-purple-400 ring-offset-1' : ''}`}
+                        className={`min-w-[48px] h-10 px-1.5 rounded-md border border-gray-200 bg-white text-gray-700 shadow-sm hover:bg-gray-50 transition-colors inline-flex flex-col items-center justify-center gap-0.5 ${exportOpen ? 'ring-2 ring-purple-400 ring-offset-1' : ''}`}
                         title="Export"
                         aria-label="Export"
                     >
-                        <Share2 size={18} aria-hidden />
-                        <span className="text-[10px] font-medium leading-none">Export</span>
+                        <Share2 size={16} aria-hidden />
+                        <span className="text-[9px] font-medium leading-none">Export</span>
                     </button>
                     <ClearCanvasAction
                         variant="menu"

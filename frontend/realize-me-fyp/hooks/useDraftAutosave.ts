@@ -10,6 +10,15 @@ export type DraftSaveStatus = 'idle' | 'saving' | 'saved' | 'error';
 export const DRAFT_AUTOSAVE_ERROR_MESSAGE =
     "Couldn't autosave your sketch. Use Save draft or check your connection before leaving.";
 
+export const DRAFT_SAVE_TIMEOUT_MS = 25_000;
+
+export const DRAFT_SAVE_TIMEOUT_MESSAGE =
+    'Save timed out — check your connection and try Save draft.';
+
+function isSaveTimeoutError(e: unknown): boolean {
+    return e instanceof DOMException && e.name === 'AbortError';
+}
+
 type Options = {
     enabled: boolean;
     user: User | null;
@@ -58,6 +67,7 @@ export function useDraftAutosave(editor: Editor | null, options: Options) {
                     Authorization: `Bearer ${token}`,
                 },
                 body: payload,
+                signal: AbortSignal.timeout(DRAFT_SAVE_TIMEOUT_MS),
             });
             if (!res.ok) {
                 const t = await res.text();
@@ -72,7 +82,9 @@ export function useDraftAutosave(editor: Editor | null, options: Options) {
         } catch (e) {
             console.error('Draft autosave failed:', e);
             setStatus('error');
-            setSaveErrorMessage(DRAFT_AUTOSAVE_ERROR_MESSAGE);
+            setSaveErrorMessage(
+                isSaveTimeoutError(e) ? DRAFT_SAVE_TIMEOUT_MESSAGE : DRAFT_AUTOSAVE_ERROR_MESSAGE
+            );
             return { ok: false, reason: 'error' };
         } finally {
             saveInFlightRef.current = false;

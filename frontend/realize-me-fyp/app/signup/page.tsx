@@ -5,16 +5,19 @@ import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { ArrowLeft, ArrowRight, Eye, EyeOff } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Eye, EyeOff, FolderOpen, Palette, Pencil } from 'lucide-react';
 
 import { useAuth } from '@/components/auth/AuthProvider';
 import { BrandLogo } from '@/components/BrandLogo';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { signupSchema, type SignupFormValues } from '@/lib/auth-schemas';
 import { mapFirebaseAuthError } from '@/lib/map-firebase-auth-error';
 import { safeRelativeNextPath } from '@/lib/safe-next-path';
+import { DESIGNER_LAVENDER_PAGE_BACKGROUND } from '@/lib/designer-page-background';
+import { INTERACTIVE_BUTTON_MOTION } from '@/lib/interactive-button-motion';
+
+const authBackLinkClass = `absolute left-4 top-4 inline-flex items-center gap-2 rounded-xl border border-violet-200/90 bg-white/95 px-3.5 py-2 text-sm font-semibold text-violet-900 shadow-sm backdrop-blur-sm hover:border-violet-300 hover:bg-violet-50/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/40 sm:left-6 sm:top-6 ${INTERACTIVE_BUTTON_MOTION}`;
 
 const fieldClass =
     'mt-1.5 flex h-11 w-full rounded-xl border border-gray-300 bg-white px-3 text-sm text-gray-900 placeholder:text-gray-400 focus:border-purple-500 focus:outline-none focus:ring-2 focus:ring-purple-500/20';
@@ -95,11 +98,11 @@ function SignupForm() {
     const disableActions = !configured || busy || (authLoading && configured);
 
     return (
-        <main className="relative flex min-h-dvh flex-col items-center justify-center bg-linear-to-br from-purple-50 via-white to-cyan-50 px-4 py-10 font-roboto">
-            <Link
-                href="/"
-                className="absolute left-4 top-4 inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white/90 px-3 py-2 text-sm font-medium text-gray-700 shadow-sm backdrop-blur-sm transition hover:bg-white sm:left-6 sm:top-6"
-            >
+        <main
+            className="relative flex min-h-dvh flex-col items-center justify-center px-4 py-10 font-roboto"
+            style={{ background: DESIGNER_LAVENDER_PAGE_BACKGROUND }}
+        >
+            <Link href="/" className={authBackLinkClass}>
                 <ArrowLeft size={16} aria-hidden />
                 Back
             </Link>
@@ -109,22 +112,36 @@ function SignupForm() {
                 </div>
             ) : null}
             <Card className="mx-auto flex w-full max-w-5xl overflow-hidden rounded-3xl border-gray-200 py-0 shadow-2xl">
-                <section className="hidden w-1/2 bg-linear-to-br from-[#8B5CF6] via-[#D946EF] to-[#06B6D4] p-10 text-white lg:flex lg:flex-col lg:justify-between">
-                    <div>
+                <section className="hidden w-1/2 bg-linear-to-br from-[#8B5CF6] via-[#D946EF] to-[#06B6D4] p-10 text-white lg:flex lg:flex-col">
+                    <div className="max-w-sm">
                         <BrandLogo theme="dark" className="mb-6" />
-                        <h1 className="font-raleway text-3xl font-bold leading-tight">Create your account</h1>
+                        <h1 className="font-raleway text-3xl font-bold leading-tight">Sketch. Style. Save your work.</h1>
                         <p className="mt-4 text-sm text-white/90">
-                            Save your creative flow and build your AI-powered fashion design workspace.
+                            Create an account to save drafts and pick up your designs when you return.
                         </p>
+                        <ul className="mt-6 space-y-3 text-sm text-white/80">
+                            <li className="flex items-start gap-2.5">
+                                <Pencil className="mt-0.5 h-4 w-4 shrink-0 text-white/70" aria-hidden />
+                                Draw on the designer canvas
+                            </li>
+                            <li className="flex items-start gap-2.5">
+                                <Palette className="mt-0.5 h-4 w-4 shrink-0 text-white/70" aria-hidden />
+                                Add outline and color hints
+                            </li>
+                            <li className="flex items-start gap-2.5">
+                                <FolderOpen className="mt-0.5 h-4 w-4 shrink-0 text-white/70" aria-hidden />
+                                Revisit saved work in your account
+                            </li>
+                        </ul>
                     </div>
-                    <p className="text-xs text-white/80">Already have an account? Log in and continue.</p>
                 </section>
 
                 <section className="w-full p-6 sm:p-10 lg:w-1/2">
                     <div className="mx-auto max-w-sm">
-                        <Badge className="border-cyan-200 bg-cyan-50 text-cyan-700">New Account</Badge>
                         <h2 className="font-raleway text-3xl font-bold text-gray-900">Sign up</h2>
-                        <p className="mt-2 text-sm text-gray-500">Create your account to get started.</p>
+                        <p className="mt-2 text-sm text-gray-500">
+                            Sign up with Google or email.
+                        </p>
 
                         {!configured ? (
                             <p
@@ -319,7 +336,10 @@ function SignupForm() {
 
 function SignupFallback() {
     return (
-        <main className="flex min-h-dvh flex-col items-center justify-center bg-linear-to-br from-purple-50 via-white to-cyan-50 px-4 py-10 font-roboto">
+        <main
+            className="flex min-h-dvh flex-col items-center justify-center px-4 py-10 font-roboto"
+            style={{ background: DESIGNER_LAVENDER_PAGE_BACKGROUND }}
+        >
             <Card className="mx-auto w-full max-w-md rounded-3xl border-gray-200 p-10 text-center shadow-xl">
                 <p className="text-sm text-gray-600">Loading…</p>
             </Card>

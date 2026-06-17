@@ -119,12 +119,12 @@ export default function ClearCanvasAction({
                 type="button"
                 onClick={() => setOpen(true)}
                 disabled={!hasCanvasShapes}
-                className="min-w-[56px] h-12 px-2 rounded-lg border border-gray-200 bg-white text-gray-700 shadow-sm transition-colors inline-flex flex-col items-center justify-center gap-0.5 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
+                className="min-w-[48px] h-10 px-1.5 rounded-md border border-gray-200 bg-white text-gray-700 shadow-sm transition-colors inline-flex flex-col items-center justify-center gap-0.5 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
                 title={hasCanvasShapes ? 'Start a new sketch' : 'Draw something first'}
                 aria-label="Start a new sketch"
             >
-                <FilePlus2 size={18} aria-hidden />
-                <span className="text-[10px] font-medium leading-none">New</span>
+                <FilePlus2 size={16} aria-hidden />
+                <span className="text-[9px] font-medium leading-none">New</span>
             </button>
         ) : (
             <button
