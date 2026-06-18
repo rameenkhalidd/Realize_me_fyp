@@ -13,6 +13,8 @@ import DesignerReturnToCanvasButton from '@/components/designer/DesignerReturnTo
 import { SignOutConfirmProvider } from '@/components/designer/SignOutConfirmContext';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { isFirebaseConfigured } from '@/lib/firebase/config';
+import { canAccessAppWithCurrentUser } from '@/lib/firebase/email-verification';
+import { buildLoginCheckEmailHref } from '@/lib/auth-login-redirect';
 import { hasClientAuthSession, isAuthRequired, shouldSkipDesignerAuthInDevelopment } from '@/lib/auth-flags';
 import { getDesignerLoginHref } from '@/lib/designer-auth-redirect';
 import {
@@ -26,7 +28,7 @@ export default function DesignerShell({ children }: { children: ReactNode }) {
     const pathname = usePathname();
     const searchParams = useSearchParams();
     const reduceMotion = useReducedMotion();
-    const { user, loading: authLoading } = useAuth();
+    const { user, loading: authLoading, signOut } = useAuth();
 
     const isResultsPage = pathname.startsWith('/designer/results');
     const transitionClass = reduceMotion ? '' : 'transition-all duration-200 ease-in-out';
@@ -41,6 +43,12 @@ export default function DesignerShell({ children }: { children: ReactNode }) {
             return;
         }
         if (isFirebaseConfigured()) {
+            if (!authLoading && user && !canAccessAppWithCurrentUser(user)) {
+                void signOut().then(() => {
+                    router.replace(buildLoginCheckEmailHref(pathname));
+                });
+                return;
+            }
             if (!authLoading && !user) {
                 router.replace(getDesignerLoginHref(pathname, searchParams));
             }
@@ -49,7 +57,7 @@ export default function DesignerShell({ children }: { children: ReactNode }) {
         if (isAuthRequired() && !hasClientAuthSession()) {
             router.replace('/login?next=' + encodeURIComponent(pathname));
         }
-    }, [router, pathname, searchParams, authLoading, user]);
+    }, [router, pathname, searchParams, authLoading, user, signOut]);
 
     const toggleRailExpanded = useCallback(() => {
         setIsRailExpanded((prev) => {

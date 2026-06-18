@@ -27,9 +27,14 @@ import {
 import { isEmailPasswordUser } from '@/lib/auth-user-utils';
 import { getFirebaseAuth } from '@/lib/firebase/client-app';
 import { isFirebaseConfigured } from '@/lib/firebase/config';
+import {
+    EmailNotVerifiedError,
+    isEmailVerificationRequired,
+    sendVerificationEmailToUser,
+} from '@/lib/firebase/email-verification';
 import { mapFirebaseAuthError } from '@/lib/map-firebase-auth-error';
 
-export type AuthActionResult = { success: boolean; error?: string };
+export type AuthActionResult = { success: boolean; error?: string; message?: string };
 
 export type AuthContextValue = {
     user: User | null;
@@ -38,9 +43,10 @@ export type AuthContextValue = {
     /** True when NEXT_PUBLIC_FIREBASE_* minimum set is present */
     configured: boolean;
     signInWithEmail: (email: string, password: string) => Promise<void>;
-    signUpWithEmail: (email: string, password: string, displayName?: string) => Promise<void>;
+    signUpWithEmail: (email: string, password: string, displayName?: string, nextPath?: string | null) => Promise<void>;
     signInWithGoogle: () => Promise<void>;
     signOut: () => Promise<void>;
+    resendVerificationEmail: (email: string, password: string, nextPath?: string | null) => Promise<AuthActionResult>;
     updateDisplayName: (name: string) => Promise<AuthActionResult>;
     changePassword: (currentPassword: string, newPassword: string) => Promise<AuthActionResult>;
     sendPasswordResetEmail: (email: string) => Promise<AuthActionResult>;
@@ -84,20 +90,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (!auth) {
             throw new Error('Firebase Auth is not configured');
         }
-        await signInWithEmailAndPassword(auth, email, password);
+        const credential = await signInWithEmailAndPassword(auth, email, password);
+        await credential.user.reload();
+
+        if (isEmailVerificationRequired(credential.user)) {
+            await firebaseSignOut(auth);
+            throw new EmailNotVerifiedError();
+        }
     }, []);
 
-    const signUpWithEmail = useCallback(async (email: string, password: string, displayName?: string) => {
-        const auth = getFirebaseAuth();
-        if (!auth) {
-            throw new Error('Firebase Auth is not configured');
-        }
-        const credential = await createUserWithEmailAndPassword(auth, email, password);
-        const name = displayName?.trim();
-        if (name) {
-            await updateProfile(credential.user, { displayName: name });
-        }
-    }, []);
+    const signUpWithEmail = useCallback(
+        async (email: string, password: string, displayName?: string, nextPath?: string | null) => {
+            const auth = getFirebaseAuth();
+            if (!auth) {
+                throw new Error('Firebase Auth is not configured');
+            }
+            const credential = await createUserWithEmailAndPassword(auth, email, password);
+            const name = displayName?.trim();
+            if (name) {
+                await updateProfile(credential.user, { displayName: name });
+            }
+            await sendVerificationEmailToUser(credential.user, nextPath);
+            await firebaseSignOut(auth);
+        },
+        []
+    );
 
     const signInWithGoogle = useCallback(async () => {
         const auth = getFirebaseAuth();
@@ -115,6 +132,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
         await firebaseSignOut(auth);
     }, []);
+
+    const resendVerificationEmail = useCallback(
+        async (email: string, password: string, nextPath?: string | null): Promise<AuthActionResult> => {
+            const auth = getFirebaseAuth();
+            if (!auth) {
+                return { success: false, error: 'Firebase Auth is not configured' };
+            }
+            try {
+                const credential = await signInWithEmailAndPassword(auth, email, password);
+                await credential.user.reload();
+
+                if (credential.user.emailVerified) {
+                    await firebaseSignOut(auth);
+                    return {
+                        success: true,
+                        message: 'Your email is already verified. You can log in now.',
+                    };
+                }
+
+                await sendVerificationEmailToUser(credential.user, nextPath);
+                await firebaseSignOut(auth);
+                return {
+                    success: true,
+                    message: 'Verification email sent — check your inbox.',
+                };
+            } catch (error) {
+                return { success: false, error: mapFirebaseAuthError(error) };
+            }
+        },
+        []
+    );
 
     const refreshCurrentUser = useCallback(async () => {
         const auth = getFirebaseAuth();
@@ -187,6 +235,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             signUpWithEmail,
             signInWithGoogle,
             signOut,
+            resendVerificationEmail,
             updateDisplayName,
             changePassword,
             sendPasswordResetEmail,
@@ -200,6 +249,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             signUpWithEmail,
             signInWithGoogle,
             signOut,
+            resendVerificationEmail,
             updateDisplayName,
             changePassword,
             sendPasswordResetEmail,

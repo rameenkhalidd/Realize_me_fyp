@@ -40,6 +40,8 @@ export function mapFirebaseAuthError(error: unknown): string {
                 return 'An account already exists with this email using a different sign-in method.';
             case 'auth/operation-not-allowed':
                 return 'This sign-in method is not enabled in the Firebase project.';
+            case 'auth/email-not-verified':
+                return 'Verify your email before signing in. Check your inbox for the link we sent when you signed up.';
             default:
                 return error.message || 'Something went wrong. Please try again.';
         }
@@ -48,6 +50,9 @@ export function mapFirebaseAuthError(error: unknown): string {
     if (error instanceof Error) {
         if (error.message === 'Firebase Auth is not configured') {
             return 'Sign-in is not set up yet. Add Firebase keys to your environment (see .env.example).';
+        }
+        if ('code' in error && (error as { code?: string }).code === 'auth/email-not-verified') {
+            return 'Verify your email before signing in. Check your inbox for the link we sent when you signed up.';
         }
         return error.message;
     }

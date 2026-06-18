@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { passwordFieldSchema } from '@/lib/password-policy';
+
 export const loginSchema = z.object({
     email: z.string().min(1, 'Email is required').email('Enter a valid email address'),
     password: z.string().min(1, 'Password is required'),
@@ -15,7 +17,7 @@ export const signupSchema = z
             .min(1, 'Name is required')
             .max(80, 'Name must be 80 characters or fewer'),
         email: z.string().min(1, 'Email is required').email('Enter a valid email address'),
-        password: z.string().min(8, 'Use at least 8 characters').max(128, 'Password is too long'),
+        password: passwordFieldSchema,
         confirmPassword: z.string().min(1, 'Confirm your password'),
     })
     .refine((data) => data.password === data.confirmPassword, {
@@ -34,7 +36,7 @@ export const displayNameSchema = z
 export const changePasswordSchema = z
     .object({
         currentPassword: z.string().min(1, 'Enter your current password'),
-        newPassword: z.string().min(8, 'Password must be at least 8 characters').max(128, 'Password is too long'),
+        newPassword: passwordFieldSchema,
         confirmPassword: z.string().min(1, 'Confirm your new password'),
     })
     .refine((data) => data.newPassword === data.confirmPassword, {

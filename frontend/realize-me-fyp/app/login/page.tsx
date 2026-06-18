@@ -13,6 +13,8 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { loginSchema, forgotPasswordSchema, type LoginFormValues } from '@/lib/auth-schemas';
 import { mapFirebaseAuthError } from '@/lib/map-firebase-auth-error';
+import { shouldAutoRedirectAuthenticatedUser } from '@/lib/auth-login-redirect';
+import { EmailNotVerifiedError } from '@/lib/firebase/email-verification';
 import { safeRelativeNextPath } from '@/lib/safe-next-path';
 import { DESIGNER_LAVENDER_PAGE_BACKGROUND } from '@/lib/designer-page-background';
 import { INTERACTIVE_BUTTON_MOTION } from '@/lib/interactive-button-motion';
@@ -36,7 +38,7 @@ function fieldRing(invalid: boolean) {
 function LoginForm() {
     const router = useRouter();
     const searchParams = useSearchParams();
-    const { user, loading: authLoading, configured, signInWithEmail, signInWithGoogle, sendPasswordResetEmail } = useAuth();
+    const { user, loading: authLoading, configured, signInWithEmail, signInWithGoogle, sendPasswordResetEmail, resendVerificationEmail } = useAuth();
     const formId = useId();
     const emailErrorId = `${formId}-email-error`;
     const passwordErrorId = `${formId}-password-error`;
@@ -48,6 +50,9 @@ function LoginForm() {
     const [forgotMessage, setForgotMessage] = useState<string | null>(null);
     const [resetToast, setResetToast] = useState<string | null>(null);
     const [resetPending, setResetPending] = useState(false);
+    const [resendPending, setResendPending] = useState(false);
+    const [infoMessage, setInfoMessage] = useState<string | null>(null);
+    const [showResendVerification, setShowResendVerification] = useState(false);
 
     const {
         register,
@@ -60,8 +65,19 @@ function LoginForm() {
     });
 
     const nextParam = searchParams.get('next');
+    const safeNext = safeRelativeNextPath(nextParam);
+    const showCheckEmailBanner = searchParams.get('checkEmail') === '1';
+    const showVerifiedBanner = searchParams.get('verified') === '1';
     const authQuerySuffix = searchParams.toString() ? `?${searchParams.toString()}` : '';
-    const showSignedInNotice = configured && !authLoading && Boolean(user);
+    const showSignedInNotice = configured && !authLoading && shouldAutoRedirectAuthenticatedUser(user);
+
+    useEffect(() => {
+        if (showCheckEmailBanner) {
+            setInfoMessage('Check your email to verify your account. After verifying, log in below.');
+        } else if (showVerifiedBanner) {
+            setInfoMessage('Email verified successfully. You can log in now.');
+        }
+    }, [showCheckEmailBanner, showVerifiedBanner]);
 
     useEffect(() => {
         if (!resetToast) {
@@ -72,29 +88,68 @@ function LoginForm() {
     }, [resetToast]);
 
     useEffect(() => {
-        if (authLoading || !user) {
+        if (authLoading || !shouldAutoRedirectAuthenticatedUser(user)) {
             return;
         }
-        router.replace(safeRelativeNextPath(nextParam));
-    }, [authLoading, user, router, nextParam]);
+        router.replace(safeNext);
+    }, [authLoading, user, router, safeNext]);
 
     const onSubmit = handleSubmit(async (data) => {
         setFormError(null);
+        setShowResendVerification(false);
+        setInfoMessage(
+            showCheckEmailBanner
+                ? 'Check your email to verify your account. After verifying, log in below.'
+                : showVerifiedBanner
+                  ? 'Email verified successfully. You can log in now.'
+                  : null
+        );
         try {
             await signInWithEmail(data.email, data.password);
-            router.replace(safeRelativeNextPath(nextParam));
+            router.replace(safeNext);
         } catch (err) {
-            setFormError(mapFirebaseAuthError(err));
+            const message = mapFirebaseAuthError(err);
+            setFormError(message);
+            if (err instanceof EmailNotVerifiedError) {
+                setShowResendVerification(true);
+            }
         }
     });
+
+    const onResendVerification = async () => {
+        setFormError(null);
+        if (!showCheckEmailBanner) {
+            setInfoMessage(null);
+        }
+        const email = getValues('email').trim();
+        const password = getValues('password');
+        if (!email || !password) {
+            setFormError('Enter your email and password, then resend the verification link.');
+            return;
+        }
+
+        setResendPending(true);
+        const result = await resendVerificationEmail(email, password, nextParam ? safeNext : null);
+        setResendPending(false);
+
+        if (!result.success) {
+            setFormError(result.error ?? 'Could not resend verification email.');
+            return;
+        }
+
+        setInfoMessage(result.message ?? 'Verification email sent — check your inbox.');
+        setShowResendVerification(false);
+    };
 
     const onGoogle = async () => {
         setFormError(null);
         setForgotMessage(null);
+        setInfoMessage(null);
+        setShowResendVerification(false);
         setGooglePending(true);
         try {
             await signInWithGoogle();
-            router.replace(safeRelativeNextPath(nextParam));
+            router.replace(safeNext);
         } catch (err) {
             setFormError(mapFirebaseAuthError(err));
         } finally {
@@ -124,7 +179,7 @@ function LoginForm() {
         setResetToast('Reset link sent — check your inbox.');
     };
 
-    const busy = isSubmitting || googlePending || resetPending;
+    const busy = isSubmitting || googlePending || resetPending || resendPending;
     const disableActions = !configured || busy || (authLoading && configured);
 
     return (
@@ -186,6 +241,31 @@ function LoginForm() {
                             </p>
                         ) : null}
 
+                        {infoMessage ? (
+                            <p
+                                className="mt-4 rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-sm text-violet-900"
+                                role="status"
+                            >
+                                {infoMessage}
+                            </p>
+                        ) : null}
+
+                        {showCheckEmailBanner ? (
+                            <div className="mt-3 rounded-xl border border-violet-100 bg-violet-50/60 px-3 py-2.5">
+                                <p className="text-xs text-violet-800">
+                                    Didn&apos;t get the email? Check spam or your university quarantine.
+                                </p>
+                                <button
+                                    type="button"
+                                    onClick={() => void onResendVerification()}
+                                    disabled={disableActions}
+                                    className="mt-2 text-xs font-semibold text-violet-700 underline-offset-2 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-400"
+                                >
+                                    {resendPending ? 'Sending verification email…' : 'Resend verification email'}
+                                </button>
+                            </div>
+                        ) : null}
+
                         <div className="mt-6 space-y-3">
                             <Button
                                 type="button"
@@ -212,6 +292,16 @@ function LoginForm() {
                                     className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800"
                                 >
                                     {formError}
+                                    {showResendVerification ? (
+                                        <button
+                                            type="button"
+                                            onClick={() => void onResendVerification()}
+                                            disabled={disableActions}
+                                            className="mt-2 block text-left text-xs font-semibold text-violet-700 underline-offset-2 hover:underline"
+                                        >
+                                            {resendPending ? 'Sending verification email…' : 'Resend verification email'}
+                                        </button>
+                                    ) : null}
                                 </div>
                             ) : null}
 

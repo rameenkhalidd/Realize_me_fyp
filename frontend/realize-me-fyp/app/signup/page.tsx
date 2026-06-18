@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useEffect, useId, useState } from 'react';
+import { Suspense, useEffect, useId, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useForm } from 'react-hook-form';
@@ -8,11 +8,14 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { ArrowLeft, ArrowRight, Eye, EyeOff, FolderOpen, Palette, Pencil } from 'lucide-react';
 
 import { useAuth } from '@/components/auth/AuthProvider';
+import PasswordMatchIndicator from '@/components/auth/PasswordMatchIndicator';
+import PasswordStrengthMeter from '@/components/auth/PasswordStrengthMeter';
 import { BrandLogo } from '@/components/BrandLogo';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { signupSchema, type SignupFormValues } from '@/lib/auth-schemas';
 import { mapFirebaseAuthError } from '@/lib/map-firebase-auth-error';
+import { buildLoginCheckEmailHref, shouldAutoRedirectAuthenticatedUser } from '@/lib/auth-login-redirect';
 import { safeRelativeNextPath } from '@/lib/safe-next-path';
 import { DESIGNER_LAVENDER_PAGE_BACKGROUND } from '@/lib/designer-page-background';
 import { INTERACTIVE_BUTTON_MOTION } from '@/lib/interactive-button-motion';
@@ -49,9 +52,11 @@ function SignupForm() {
     const {
         register,
         handleSubmit,
+        watch,
         formState: { errors, isSubmitting },
     } = useForm<SignupFormValues>({
         resolver: zodResolver(signupSchema),
+        mode: 'onChange',
         defaultValues: {
             displayName: '',
             email: '',
@@ -60,22 +65,32 @@ function SignupForm() {
         },
     });
 
+    const watchedValues = watch();
+    const canSubmitSignup = useMemo(
+        () => signupSchema.safeParse(watchedValues).success,
+        [watchedValues]
+    );
+    const confirmPasswordMismatch =
+        watchedValues.confirmPassword.length > 0 &&
+        watchedValues.password !== watchedValues.confirmPassword;
+
     const nextParam = searchParams.get('next');
+    const safeNext = safeRelativeNextPath(nextParam);
     const authQuerySuffix = searchParams.toString() ? `?${searchParams.toString()}` : '';
-    const showSignedInNotice = configured && !authLoading && Boolean(user);
+    const showSignedInNotice = configured && !authLoading && shouldAutoRedirectAuthenticatedUser(user);
 
     useEffect(() => {
-        if (authLoading || !user) {
+        if (authLoading || !shouldAutoRedirectAuthenticatedUser(user)) {
             return;
         }
-        router.replace(safeRelativeNextPath(nextParam));
-    }, [authLoading, user, router, nextParam]);
+        router.replace(safeNext);
+    }, [authLoading, user, router, safeNext]);
 
     const onSubmit = handleSubmit(async (data) => {
         setFormError(null);
         try {
-            await signUpWithEmail(data.email, data.password, data.displayName);
-            router.replace(safeRelativeNextPath(nextParam));
+            await signUpWithEmail(data.email, data.password, data.displayName, nextParam ? safeNext : null);
+            router.replace(buildLoginCheckEmailHref(nextParam ? safeNext : null));
         } catch (err) {
             setFormError(mapFirebaseAuthError(err));
         }
@@ -86,7 +101,7 @@ function SignupForm() {
         setGooglePending(true);
         try {
             await signInWithGoogle();
-            router.replace(safeRelativeNextPath(nextParam));
+            router.replace(safeNext);
         } catch (err) {
             setFormError(mapFirebaseAuthError(err));
         } finally {
@@ -95,7 +110,8 @@ function SignupForm() {
     };
 
     const busy = isSubmitting || googlePending;
-    const disableActions = !configured || busy || (authLoading && configured);
+    const disableGoogle = !configured || busy || (authLoading && configured);
+    const disableSignupSubmit = disableGoogle || !canSubmitSignup;
 
     return (
         <main
@@ -158,7 +174,7 @@ function SignupForm() {
                                 type="button"
                                 variant="secondary"
                                 className="h-11 w-full rounded-xl text-sm font-semibold"
-                                disabled={disableActions}
+                                disabled={disableGoogle}
                                 onClick={onGoogle}
                             >
                                 {googlePending ? 'Opening Google…' : 'Continue with Google'}
@@ -260,6 +276,7 @@ function SignupForm() {
                                         {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                                     </button>
                                 </div>
+                                <PasswordStrengthMeter password={watchedValues.password} />
                                 {errors.password ? (
                                     <p id={passwordErrorId} className={fieldErrorClass}>
                                         {errors.password.message}
@@ -277,7 +294,7 @@ function SignupForm() {
                                         type={showConfirm ? 'text' : 'password'}
                                         autoComplete="new-password"
                                         placeholder="Confirm your password"
-                                        className={`${fieldClass} pr-11 ${fieldRing(!!errors.confirmPassword)}`}
+                                        className={`${fieldClass} pr-11 ${fieldRing(!!errors.confirmPassword || confirmPasswordMismatch)}`}
                                         aria-invalid={errors.confirmPassword ? 'true' : 'false'}
                                         aria-describedby={
                                             [errors.confirmPassword ? confirmErrorId : '', formError && formErrorId]
@@ -295,6 +312,10 @@ function SignupForm() {
                                         {showConfirm ? <EyeOff size={18} /> : <Eye size={18} />}
                                     </button>
                                 </div>
+                                <PasswordMatchIndicator
+                                    password={watchedValues.password}
+                                    confirmPassword={watchedValues.confirmPassword}
+                                />
                                 {errors.confirmPassword ? (
                                     <p id={confirmErrorId} className={fieldErrorClass}>
                                         {errors.confirmPassword.message}
@@ -306,7 +327,7 @@ function SignupForm() {
                                 type="submit"
                                 variant="gradient"
                                 className="h-11 w-full rounded-xl text-sm font-semibold"
-                                disabled={disableActions}
+                                disabled={disableSignupSubmit}
                             >
                                 {isSubmitting ? 'Creating account…' : 'Create Account'}
                             </Button>

@@ -2,9 +2,11 @@
 
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import type { User } from 'firebase/auth';
-import { Check, Eye, EyeOff, Loader2, X } from 'lucide-react';
+import { Eye, EyeOff, Loader2 } from 'lucide-react';
 
 import { useAuth } from '@/components/auth/AuthProvider';
+import PasswordMatchIndicator from '@/components/auth/PasswordMatchIndicator';
+import PasswordStrengthMeter from '@/components/auth/PasswordStrengthMeter';
 import { changePasswordSchema } from '@/lib/auth-schemas';
 import { INTERACTIVE_BUTTON_MOTION } from '@/lib/interactive-button-motion';
 
@@ -50,51 +52,6 @@ function PasswordField({ id, label, value, onChange, autoComplete, invalid }: Pa
     );
 }
 
-function getPasswordStrength(password: string): { score: number; label: string; pillColors: string[] } {
-    if (password.length === 0) {
-        return { score: 0, label: '', pillColors: ['bg-gray-200', 'bg-gray-200', 'bg-gray-200', 'bg-gray-200'] };
-    }
-    if (password.length < 8) {
-        return {
-            score: 1,
-            label: 'Too short',
-            pillColors: ['bg-red-400', 'bg-gray-200', 'bg-gray-200', 'bg-gray-200'],
-        };
-    }
-
-    let points = 1;
-    if (/[0-9]/.test(password) || /[^A-Za-z0-9]/.test(password)) {
-        points += 1;
-    }
-    if (password.length >= 12) {
-        points += 1;
-    }
-    if (/[A-Z]/.test(password) && /[a-z]/.test(password) && /[0-9]/.test(password)) {
-        points += 1;
-    }
-
-    const score = Math.min(4, Math.max(2, points));
-    if (score === 2) {
-        return {
-            score,
-            label: 'Add a number or symbol',
-            pillColors: ['bg-orange-400', 'bg-orange-400', 'bg-gray-200', 'bg-gray-200'],
-        };
-    }
-    if (score === 3) {
-        return {
-            score,
-            label: 'Looking good',
-            pillColors: ['bg-yellow-400', 'bg-yellow-400', 'bg-yellow-400', 'bg-gray-200'],
-        };
-    }
-    return {
-        score: 4,
-        label: 'Strong password',
-        pillColors: ['bg-emerald-500', 'bg-emerald-500', 'bg-emerald-500', 'bg-emerald-500'],
-    };
-}
-
 type ChangePasswordFormProps = {
     user: User;
     onResetEmailSent: () => void;
@@ -111,8 +68,6 @@ export default function ChangePasswordForm({ user, onResetEmailSent }: ChangePas
     const [sendingReset, setSendingReset] = useState(false);
     const [success, setSuccess] = useState(false);
 
-    const strength = useMemo(() => getPasswordStrength(newPassword), [newPassword]);
-    const passwordsMatch = confirmPassword.length > 0 && newPassword === confirmPassword;
     const passwordsMismatch = confirmPassword.length > 0 && newPassword !== confirmPassword;
 
     const canSubmit = useMemo(() => {
@@ -214,19 +169,7 @@ export default function ChangePasswordForm({ user, onResetEmailSent }: ChangePas
                     onChange={setNewPassword}
                     autoComplete="new-password"
                 />
-                {newPassword.length > 0 ? (
-                    <div className="mt-2 space-y-1.5">
-                        <div className="grid grid-cols-4 gap-1.5">
-                            {strength.pillColors.map((color, index) => (
-                                <div
-                                    key={index}
-                                    className={`h-1 rounded-full transition-all duration-300 ${color}`}
-                                />
-                            ))}
-                        </div>
-                        <p className="text-xs text-gray-500">{strength.label}</p>
-                    </div>
-                ) : null}
+                <PasswordStrengthMeter password={newPassword} />
             </div>
 
             <div>
@@ -238,25 +181,7 @@ export default function ChangePasswordForm({ user, onResetEmailSent }: ChangePas
                     autoComplete="new-password"
                     invalid={passwordsMismatch}
                 />
-                {confirmPassword.length > 0 ? (
-                    <div
-                        className={`mt-1.5 flex items-center gap-1 text-xs transition-opacity duration-200 ${
-                            passwordsMatch || passwordsMismatch ? 'opacity-100' : 'opacity-0'
-                        }`}
-                    >
-                        {passwordsMatch ? (
-                            <>
-                                <Check className="h-3.5 w-3.5 text-emerald-600" aria-hidden />
-                                <span className="text-emerald-600">Passwords match</span>
-                            </>
-                        ) : (
-                            <>
-                                <X className="h-3.5 w-3.5 text-red-600" aria-hidden />
-                                <span className="text-red-600">Passwords do not match</span>
-                            </>
-                        )}
-                    </div>
-                ) : null}
+                <PasswordMatchIndicator password={newPassword} confirmPassword={confirmPassword} />
             </div>
 
             {formError ? (
