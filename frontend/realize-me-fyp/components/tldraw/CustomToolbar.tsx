@@ -22,9 +22,14 @@ import {
     Star,
     Cloud,
     Heart,
+    ImageOff,
 } from 'lucide-react';
 
+import { getTemplateShapeIds, removeTemplateShapes } from '@/lib/tldraw-utils';
+
 import { useGenerateFlow } from './GenerateFlowContext';
+import CanvasZoomBar from './CanvasZoomBar';
+import ToolbarTooltip from './ToolbarTooltip';
 
 type AllowedGeoShape =
     | 'rectangle'
@@ -90,7 +95,7 @@ function ShapePreview({ shape }: { shape: AllowedGeoShape | 'line' }) {
 }
 
 export default function CustomToolbar() {
-    const { isGenerating, notifyEmptyCanvas } = useGenerateFlow();
+    const { isGenerating, notifyEmptyCanvas, notifyCanvasMessage } = useGenerateFlow();
     const editor = useEditor();
     const [isShapeMenuOpen, setIsShapeMenuOpen] = useState(false);
     const [activeGeoShape, setActiveGeoShape] = useState<AllowedGeoShape>('rectangle');
@@ -114,6 +119,11 @@ export default function CustomToolbar() {
         () => ((editor ? Array.from(editor.getCurrentPageShapeIds()).length : 0) > 0),
         [editor]
     );
+    const hasTemplateShapes = useValue(
+        'has template shapes',
+        () => (editor ? getTemplateShapeIds(editor).length > 0 : false),
+        [editor]
+    );
 
     if (!editor) return null;
 
@@ -122,7 +132,7 @@ export default function CustomToolbar() {
         ? 'Draw on canvas first, then generate'
         : isGenerating
             ? 'Generation in progress — please wait'
-            : 'Generate from current sketch';
+            : 'Generate from your full sketch (all shapes on canvas, not just the visible area)';
 
     const tools = [
         { id: 'select', icon: MousePointer2, label: 'Select' },
@@ -135,6 +145,12 @@ export default function CustomToolbar() {
         const selectedIds = editor.getSelectedShapeIds();
         if (selectedIds.length > 0) {
             editor.deleteShapes(selectedIds);
+        }
+    };
+
+    const handleRemoveTemplate = () => {
+        if (removeTemplateShapes(editor)) {
+            notifyCanvasMessage('Template removed. Press Ctrl+Z to bring it back.');
         }
     };
 
@@ -155,20 +171,22 @@ export default function CustomToolbar() {
         ? 'Line'
         : (ALLOWED_SHAPES.find((shape) => shape.id === activeGeoShape)?.label ?? 'Shape');
 
-    // 🌈 BRAND THEME BUTTONS (Smooth gradients)
     const activeBtn =
-        'bg-gradient-to-r from-[#8B5CF6] via-[#D946EF] to-[#06B6D4] text-white shadow-realize-xl scale-[1.07] border border-realize transition-all duration-300';
+        'bg-realize-gradient-fuchsia text-slate-900 shadow-realize-xl scale-[1.07] border border-violet-200/70 transition-all duration-300';
 
     const inactiveBtn =
         'bg-white text-gray-600 hover:bg-gray-50 border border-realize hover:text-realize shadow-sm transition-all duration-200';
 
     const disabledBtn = 'disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-white disabled:hover:text-gray-600';
 
+    const removeGuideBtn =
+        'bg-violet-50 text-violet-700 border border-violet-200/80 shadow-sm hover:bg-violet-100 hover:text-violet-800 hover:border-violet-300/90 active:bg-violet-100/90 transition-all duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-400 focus-visible:ring-offset-2';
+
     return (
         <div
             className="
                 absolute bottom-6 left-1/2 -translate-x-1/2 z-[9999] pointer-events-auto
-                flex items-center gap-3 px-5 py-3
+                flex flex-nowrap items-center gap-3 px-5 py-3
                 rounded-2xl border-realize shadow-realize-xl
                 bg-white/80 backdrop-blur-2xl
             "
@@ -182,7 +200,7 @@ export default function CustomToolbar() {
                     <button
                         key={tool.id}
                         onClick={() => editor.setCurrentTool(tool.id)}
-                        className={`p-3 rounded-xl ${isActive ? activeBtn : inactiveBtn}`}
+                        className={`p-3 rounded-xl shrink-0 ${isActive ? activeBtn : inactiveBtn}`}
                         title={`Switch to ${tool.label} tool`}
                     >
                         <Icon size={20} />
@@ -218,7 +236,7 @@ export default function CustomToolbar() {
 
                 <button
                     onClick={() => setIsShapeMenuOpen((open) => !open)}
-                    className={`p-3 rounded-xl ${currentToolId === 'geo' || currentToolId === 'line' ? activeBtn : inactiveBtn}`}
+                    className={`shrink-0 p-3 rounded-xl ${currentToolId === 'geo' || currentToolId === 'line' ? activeBtn : inactiveBtn}`}
                     title="Choose shape tool"
                 >
                     <div className="flex items-center gap-1">
@@ -230,13 +248,13 @@ export default function CustomToolbar() {
             </div>
 
             {/* Divider */}
-            <div className="w-[1px] h-8 bg-realize mx-2" />
+            <div className="w-[1px] h-8 bg-realize mx-2 shrink-0" />
 
             {/* === History / Delete Actions === */}
             <button
                 onClick={() => editor.undo()}
                 disabled={!canUndo}
-                className={`p-3 rounded-xl ${inactiveBtn} ${disabledBtn}`}
+                className={`shrink-0 p-3 rounded-xl ${inactiveBtn} ${disabledBtn}`}
                 title="Undo last action (Ctrl/Cmd+Z)"
             >
                 <Undo2 size={20} />
@@ -245,8 +263,8 @@ export default function CustomToolbar() {
             <button
                 onClick={() => editor.redo()}
                 disabled={!canRedo}
-                className={`p-3 rounded-xl ${inactiveBtn} ${disabledBtn}`}
-                title="Redo last action (Ctrl+Y or Cmd+Shift+Z)"
+                className={`shrink-0 p-3 rounded-xl ${inactiveBtn} ${disabledBtn}`}
+                title="Redo last action (Ctrl+Y, Ctrl+Shift+Z, or Cmd+Shift+Z)"
             >
                 <Redo2 size={20} />
             </button>
@@ -254,11 +272,32 @@ export default function CustomToolbar() {
             <button
                 onClick={handleDeleteSelected}
                 disabled={!hasSelection}
-                className={`p-3 rounded-xl ${inactiveBtn} ${disabledBtn}`}
+                className={`shrink-0 p-3 rounded-xl ${inactiveBtn} ${disabledBtn}`}
                 title="Delete selected shapes"
             >
                 <Trash2 size={20} />
             </button>
+
+            {hasTemplateShapes && (
+                <ToolbarTooltip
+                    label="Remove template"
+                    detail="Removes the tracing guide"
+                    detailLine2="Keeps your strokes"
+                >
+                    <button
+                        type="button"
+                        onClick={handleRemoveTemplate}
+                        className={`p-3 rounded-xl ${removeGuideBtn}`}
+                        aria-label="Remove template — removes the tracing guide, keeps your strokes"
+                    >
+                        <ImageOff size={20} />
+                    </button>
+                </ToolbarTooltip>
+            )}
+
+            <div className="w-[1px] h-8 bg-realize mx-2 shrink-0" />
+
+            <CanvasZoomBar inactiveBtnClass={inactiveBtn} disabledBtnClass={disabledBtn} />
 
             {/* === Generate Button === */}
             <button
@@ -274,8 +313,8 @@ export default function CustomToolbar() {
                 title={generateTitle}
                 aria-disabled={generateInactive}
                 className={`
-                    relative px-7 py-3 rounded-xl font-raleway font-bold text-white
-                    bg-gradient-to-r from-[#8B5CF6] via-[#D946EF] to-[#06B6D4]
+                    relative shrink-0 px-7 py-3 rounded-xl font-raleway font-bold text-slate-900
+                    bg-realize-gradient-fuchsia border border-violet-200/70
                     shadow-realize-xl overflow-hidden flex items-center gap-2
                     transition-all duration-200
                     ${generateInactive
@@ -285,12 +324,12 @@ export default function CustomToolbar() {
             >
                 <div
                     className="
-                    absolute inset-0 
-                    bg-gradient-to-r from-[#8B5CF6] to-[#06B6D4]
-                    blur-2xl opacity-30 -z-10
+                    absolute inset-0
+                    bg-realize-gradient-fuchsia
+                    blur-xl opacity-15 -z-10
                 "
                 />
-                <Wand2 size={20} className="drop-shadow-md" />
+                <Wand2 size={20} />
                 Generate
             </button>
         </div>

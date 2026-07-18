@@ -25,6 +25,9 @@ import {
     Heart,
 } from 'lucide-react';
 
+import CanvasZoomBar from '@/components/tldraw/CanvasZoomBar';
+import ClearCanvasAction from '@/components/tldraw/ClearCanvasAction';
+
 type AllowedGeoShape =
     | 'rectangle'
     | 'ellipse'
@@ -106,6 +109,11 @@ export default function GuestDemoToolbar() {
     const hasSelection = useValue(
         'has selection',
         () => (editor?.getSelectedShapeIds().length ?? 0) > 0,
+        [editor]
+    );
+    const hasCanvasShapes = useValue(
+        'has canvas shapes',
+        () => ((editor ? Array.from(editor.getCurrentPageShapeIds()).length : 0) > 0),
         [editor]
     );
 
@@ -238,7 +246,7 @@ export default function GuestDemoToolbar() {
                 onClick={() => editor.redo()}
                 disabled={!canRedo}
                 className={`p-3 rounded-xl ${inactiveBtn} ${disabledBtn}`}
-                title="Redo last action (Ctrl+Y or Cmd+Shift+Z)"
+                title="Redo last action (Ctrl+Y, Ctrl+Shift+Z, or Cmd+Shift+Z)"
             >
                 <Redo2 size={20} />
             </button>
@@ -252,6 +260,17 @@ export default function GuestDemoToolbar() {
             >
                 <Trash2 size={20} />
             </button>
+
+            <ClearCanvasAction
+                variant="icon"
+                hasCanvasShapes={hasCanvasShapes}
+                inactiveBtnClass={inactiveBtn}
+                disabledBtnClass={disabledBtn}
+            />
+
+            <div className="w-[1px] h-8 bg-realize mx-2 shrink-0" />
+
+            <CanvasZoomBar inactiveBtnClass={inactiveBtn} disabledBtnClass={disabledBtn} />
 
             <Link
                 href={LOGIN_FULL_WORKSPACE}

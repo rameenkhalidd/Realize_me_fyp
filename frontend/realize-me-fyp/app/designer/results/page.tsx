@@ -2,9 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState, Suspense } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import Link from 'next/link';
 import { Info, Loader, ShoppingBag } from 'lucide-react';
-import { BrandLogo } from '@/components/BrandLogo';
 import { ResultsEntryBanner } from '@/components/designer/ResultsEntryBanner';
 import { INTERACTIVE_BUTTON_MOTION } from '@/lib/interactive-button-motion';
 import { HISTORY_ID_STORAGE_KEY, RESULTS_ENTRY_WELCOME_KEY } from '@/lib/results-entry';
@@ -258,20 +256,8 @@ function ResultsPageContent() {
     }
 
     return (
-        <div className="min-h-screen bg-realize text-realize font-roboto">
-            <header className="bg-white/80 backdrop-blur-sm border-b border-realize sticky top-0 z-10 px-6 py-4">
-                <div className="max-w-7xl mx-auto flex items-center justify-between">
-                    <div className="flex items-center">
-                        <BrandLogo theme="light" subtitle="Results" />
-                    </div>
-
-                    <Link href="/designer" className="text-sm text-gray-600 hover:text-gray-900 font-roboto">
-                        Return to canvas
-                    </Link>
-                </div>
-            </header>
-
-            <main className="max-w-7xl mx-auto px-6 py-8 md:py-10">
+        <div className="min-h-0 flex-1 overflow-y-auto bg-realize text-realize font-roboto">
+            <main className="mx-auto max-w-7xl px-6 py-8 md:py-10">
                 <h1 className="sr-only">Design comparison</h1>
 
                 {showEntryWelcome && <ResultsEntryBanner onDismiss={dismissEntryWelcome} />}
@@ -445,14 +431,36 @@ function ResultsPageContent() {
                                             </p>
 
                                             {isUsableProductUrl(product.product_url) ? (
-                                                <a
-                                                    href={product.product_url}
-                                                    target="_blank"
-                                                    rel="noopener noreferrer"
-                                                    className="block w-full rounded-lg border border-violet-200/70 bg-realize-gradient-fuchsia px-4 py-2 text-center text-sm font-semibold text-slate-900 shadow-sm transition-opacity hover:opacity-95"
-                                                >
-                                                    View Product
-                                                </a>
+                                                <div className="flex flex-col gap-2">
+                                                    {/* View Product */}
+                                                    <a
+                                                        href={product.image_url}
+                                                        target="_blank"
+                                                        rel="noopener noreferrer"
+                                                        className="block w-full rounded-lg border border-violet-200/70 bg-gray-100 px-4 py-2 text-center text-sm font-semibold text-gray-800 shadow-sm hover:bg-gray-200"
+                                                    >
+                                                        View Product
+                                                    </a>
+
+                                                    {/* Buy Product */}
+                                                    {isUsableProductUrl(product.product_url) ? (
+                                                        <a
+                                                            href={product.product_url}
+                                                            target="_blank"
+                                                            rel="noopener noreferrer"
+                                                            className="block w-full rounded-lg border border-violet-200/70 bg-realize-gradient-fuchsia px-4 py-2 text-center text-sm font-semibold text-slate-900 shadow-sm transition-opacity hover:opacity-95"
+                                                        >
+                                                            Buy Product
+                                                        </a>
+                                                    ) : (
+                                                        <p
+                                                            className="block w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-2 text-center text-sm font-medium text-gray-500"
+                                                            role="status"
+                                                        >
+                                                            Store link unavailable
+                                                        </p>
+                                                    )}
+                                                </div>
                                             ) : (
                                                 <p
                                                     className="block w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-2 text-center text-sm font-medium text-gray-500"

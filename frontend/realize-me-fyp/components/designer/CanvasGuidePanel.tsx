@@ -112,7 +112,7 @@ export default function CanvasGuidePanel({ variant = 'full' }: CanvasGuidePanelP
             <h2 className="font-raleway text-lg font-semibold text-gray-900 md:text-xl">
                 Quick guide
             </h2>
-            <p className="mt-0.5 text-xs text-gray-500 md:text-sm">Five steps to get going.</p>
+            <p className="mt-0.5 text-xs text-gray-500 md:text-sm">Five steps — outline first, then color.</p>
 
             <ol className="mt-5 space-y-3 md:mt-6 md:space-y-3.5">
                 <li className="rounded-lg border border-gray-100 bg-gray-50/90 px-3 py-3 md:px-4">
@@ -123,8 +123,8 @@ export default function CanvasGuidePanel({ variant = 'full' }: CanvasGuidePanelP
                         <div>
                             <h3 className="font-raleway text-sm font-semibold text-gray-900">1. Tools</h3>
                             <p className="mt-0.5 text-sm leading-snug text-gray-600">
-                                Bottom bar: move, draw, erase, and shapes. Top left: files in and
-                                out.
+                                Left sidebar: <strong className="text-gray-800">Design</strong> and{' '}
+                                <strong className="text-gray-800">My work</strong>. Bottom bar: draw tools. Top left: import and export. Pinch or two-finger scroll on the canvas to zoom and pan. Click the zoom % to reset to 100%; use Fit to see your whole sketch.
                             </p>
                         </div>
                     </div>
@@ -136,10 +136,10 @@ export default function CanvasGuidePanel({ variant = 'full' }: CanvasGuidePanelP
                             <PenTool className="h-4 w-4" aria-hidden />
                         </div>
                         <div>
-                            <h3 className="font-raleway text-sm font-semibold text-gray-900">2. Draw</h3>
+                            <h3 className="font-raleway text-sm font-semibold text-gray-900">2. Outline mode</h3>
                             <p className="mt-0.5 text-sm leading-snug text-gray-600">
-                                Use <strong className="text-gray-800">Draw</strong> or a shape tool.
-                                Sketch your garment on the canvas.
+                                Select <strong className="text-gray-800">Outline</strong> and draw the garment structure in{' '}
+                                <strong className="text-gray-800">black or grey</strong> only.
                             </p>
                         </div>
                     </div>
@@ -151,9 +151,9 @@ export default function CanvasGuidePanel({ variant = 'full' }: CanvasGuidePanelP
                             <Palette className="h-4 w-4" aria-hidden />
                         </div>
                         <div>
-                            <h3 className="font-raleway text-sm font-semibold text-gray-900">3. Style</h3>
+                            <h3 className="font-raleway text-sm font-semibold text-gray-900">3. Color hints mode</h3>
                             <p className="mt-0.5 text-sm leading-snug text-gray-600">
-                                Right panel: color, stroke, brush size, opacity.
+                                Switch to <strong className="text-gray-800">Color hints</strong> and add colored strokes where you want fabric color. Optional — a default applies if you skip this.
                             </p>
                         </div>
                     </div>
@@ -166,21 +166,15 @@ export default function CanvasGuidePanel({ variant = 'full' }: CanvasGuidePanelP
                         </div>
                         <div>
                             <h3 className="font-raleway text-sm font-semibold text-gray-900">
-                                4. Already have a sketch?
+                                4. Import (optional)
                             </h3>
                             <p className="mt-0.5 text-sm leading-snug text-gray-600">
-                                If you drew it elsewhere, bring it in with{' '}
+                                Use{' '}
                                 <span className="inline-flex items-center gap-1 font-medium text-gray-800">
                                     <FolderInput className="h-3.5 w-3.5 shrink-0 text-gray-700" aria-hidden />
                                     Import
                                 </span>{' '}
-                                top left. It sits on the canvas like your own lines, so keep editing
-                                or press{' '}
-                                <span className="inline-flex items-center gap-1 font-medium text-gray-800">
-                                    <Sparkles className="h-3.5 w-3.5 shrink-0 text-violet-600" aria-hidden />
-                                    Generate
-                                </span>{' '}
-                                when you are ready.
+                                top left for a reference image, then trace or edit on top.
                             </p>
                         </div>
                     </div>
@@ -193,12 +187,10 @@ export default function CanvasGuidePanel({ variant = 'full' }: CanvasGuidePanelP
                         </div>
                         <div>
                             <h3 className="font-raleway text-sm font-semibold text-gray-900">
-                                5. Generate image
+                                5. Generate
                             </h3>
                             <p className="mt-0.5 text-sm leading-snug text-gray-600">
-                                When your sketch is done, press{' '}
-                                <strong className="text-gray-800">Generate</strong> in the bottom
-                                toolbar. That sends your sketch to generation.
+                                Press <strong className="text-gray-800">Generate</strong>. Pan and zoom are for working comfort — we always export your entire sketch (outline and color layers) to the AI pipeline.
                             </p>
                         </div>
                     </div>

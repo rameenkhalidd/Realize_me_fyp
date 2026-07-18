@@ -13,7 +13,12 @@ export function mapFirebaseAuthError(error: unknown): string {
             case 'auth/user-not-found':
                 return 'No account found with that email. Check the address or sign up.';
             case 'auth/wrong-password':
-                return 'Incorrect password. Try again or reset your password in the Firebase console.';
+            case 'auth/invalid-credential':
+                return 'Incorrect password. Try again or send yourself a reset link.';
+            case 'auth/requires-recent-login':
+                return 'For security, sign out and sign in again, then retry this change.';
+            case 'auth/missing-password':
+                return 'Enter your current password to continue.';
             case 'auth/invalid-credential':
             case 'auth/invalid-login-credentials':
                 return 'Email or password is incorrect. Try again.';
@@ -35,6 +40,8 @@ export function mapFirebaseAuthError(error: unknown): string {
                 return 'An account already exists with this email using a different sign-in method.';
             case 'auth/operation-not-allowed':
                 return 'This sign-in method is not enabled in the Firebase project.';
+            case 'auth/email-not-verified':
+                return 'Verify your email before signing in. Check your inbox for the link we sent when you signed up.';
             default:
                 return error.message || 'Something went wrong. Please try again.';
         }
@@ -43,6 +50,9 @@ export function mapFirebaseAuthError(error: unknown): string {
     if (error instanceof Error) {
         if (error.message === 'Firebase Auth is not configured') {
             return 'Sign-in is not set up yet. Add Firebase keys to your environment (see .env.example).';
+        }
+        if ('code' in error && (error as { code?: string }).code === 'auth/email-not-verified') {
+            return 'Verify your email before signing in. Check your inbox for the link we sent when you signed up.';
         }
         return error.message;
     }

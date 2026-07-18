@@ -2,13 +2,35 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Save } from 'lucide-react';
-import { Editor, Tldraw, type TLStoreSnapshot } from 'tldraw';
+import { Editor, Tldraw, type TLShapeId, type TLStoreSnapshot } from 'tldraw';
 import 'tldraw/tldraw.css';
 
+
 import { useAuth } from '@/components/auth/AuthProvider';
-import { blobToBase64, exportCanvasToBlob, getEditorSnapshot, loadEditorSnapshot } from '@/lib/tldraw-utils';
+import {
+    blobToBase64,
+    clearAllCanvasShapes,
+    exportCombinedSketchPreviewBlob,
+    exportColorHintsPngBlob,
+    exportSketchPngBlob,
+    setupDesignerCamera,
+    getEditorSnapshot,
+    getImagePlacementPoint,
+    getActiveTemplateGarment,
+    hasColorHintShapes,
+    hasOutlineShapes,
+    restoreEditorSnapshot,
+    type ActiveTemplateGarment,
+} from '@/lib/tldraw-utils';
+import GenerateConfirmModal, {
+    type GenerateCategorySelection,
+} from '@/components/designer/GenerateConfirmModal';
+import { findTemplateBySrcOrName } from '@/components/designer/templates';
 import SynthesisPreviewModal from '@/components/designer/SynthesisPreviewModal';
+import {
+    DEFAULT_GARMENT_LABEL,
+    DEFAULT_GENERATION_CATEGORY_ID,
+} from '@/lib/generation-categories';
 import {
     HISTORY_ID_STORAGE_KEY,
     RECOVER_SKETCH_STORAGE_KEY,
@@ -16,25 +38,34 @@ import {
 } from '@/lib/results-entry';
 import { validateImageFileForCanvas } from '@/lib/image-import-limits';
 import { patchDesignerImageImportLimits } from '@/lib/tldraw-patch-image-imports';
+import { maybeDownloadPipelinePngsForDebug } from '@/lib/pipeline-debug-download';
 import { getFirebaseAuth } from '@/lib/firebase/client-app';
 import { isFirebaseConfigured } from '@/lib/firebase/config';
-import { useDraftAutosave } from '@/hooks/useDraftAutosave';
+import { useDesignerDraft } from '@/components/designer/DesignerDraftContext';
+import { useEmptyCanvasZoomReset } from '@/hooks/useEmptyCanvasZoomReset';
 
 import CustomToolbar from './CustomToolbar';
 import CustomStylePanel from './CustomStylePanel';
 import CanvasFileMenu from './CanvasFileMenu';
+import DesignerKeyboardShortcuts from './DesignerKeyboardShortcuts';
+import DesignerToastStack from './DesignerToastStack';
+import { DrawingModeProvider } from './DrawingModeContext';
 import { GenerateFlowProvider } from './GenerateFlowContext';
 
 const USE_MOCK_GENERATION = process.env.NEXT_PUBLIC_USE_MOCK_GENERATION === 'true';
 
 const EMPTY_CANVAS_TOAST_MESSAGE = 'Canvas is empty, Add a sketch to generate.';
+const NO_OUTLINE_TOAST_MESSAGE = 'Draw an outline first (Outline mode).';
+const NO_COLOR_HINTS_TOAST_MESSAGE =
+    'No color hints added — a default color will be applied.';
 
 const STORAGE_QUOTA_USER_MESSAGE =
     'This design is too large to generate an image. Try removing large image imports or simplifying the sketch.';
 const AUTH_REQUIRED_USER_MESSAGE = 'Your session expired. Please sign in again to generate.';
 
-const TOAST_OUTER_CLASS =
-    'fixed left-1/2 z-10050 w-[min(calc(100vw-2rem),24rem)] -translate-x-1/2 rounded-xl border border-purple-200/90 bg-white/95 px-4 py-3 font-roboto shadow-md backdrop-blur-sm ring-1 ring-violet-500/10 transition-opacity duration-200';
+const PENDING_TEMPLATE_STORAGE_KEY = 'realizeme:pendingTemplate';
+const TEMPLATE_LOAD_ERROR_MESSAGE =
+    "Couldn't load the template. Check your connection and try again from Templates.";
 
 const SYNTHESIS_STEPS = [
     'Reading sketch lines and proportions...',
@@ -60,6 +91,90 @@ function wait(ms: number) {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+type GenerationPayload = {
+    sketchBlob: Blob;
+    colorHintsBlob: Blob;
+    previewBlob: Blob;
+    generationCategoryId?: string;
+    garmentLabel?: string;
+};
+
+type PendingTemplate = {
+    id: string;
+    src: string;
+    name: string;
+    garmentLabel: string;
+    generationCategoryId: string;
+};
+
+/** Read (without consuming) the template handoff from the Templates page; discard malformed entries. */
+function readPendingTemplate(): PendingTemplate | null {
+    const raw = sessionStorage.getItem(PENDING_TEMPLATE_STORAGE_KEY);
+    if (!raw) {
+        return null;
+    }
+    try {
+        const parsed = JSON.parse(raw) as {
+            id?: unknown;
+            src?: unknown;
+            name?: unknown;
+            garmentLabel?: unknown;
+            generationCategoryId?: unknown;
+        };
+        if (typeof parsed.src === 'string' && typeof parsed.name === 'string') {
+            if (
+                typeof parsed.id === 'string' &&
+                typeof parsed.garmentLabel === 'string' &&
+                typeof parsed.generationCategoryId === 'string'
+            ) {
+                return {
+                    id: parsed.id,
+                    src: parsed.src,
+                    name: parsed.name,
+                    garmentLabel: parsed.garmentLabel,
+                    generationCategoryId: parsed.generationCategoryId,
+                };
+            }
+
+            const match = findTemplateBySrcOrName(parsed.src, parsed.name);
+            if (match) {
+                return {
+                    id: match.id,
+                    src: match.src,
+                    name: match.name,
+                    garmentLabel: match.garmentLabel,
+                    generationCategoryId: match.generationCategoryId,
+                };
+            }
+        }
+    } catch {
+        // fall through — malformed entry is removed below
+    }
+    sessionStorage.removeItem(PENDING_TEMPLATE_STORAGE_KEY);
+    return null;
+}
+
+/** Wait for shape ids that were not present before an async placement (instead of a blind timeout). */
+async function waitForNewShapeIds(
+    editor: Editor,
+    beforeIds: ReadonlySet<TLShapeId>,
+    timeoutMs = 2000
+): Promise<TLShapeId[]> {
+    const startedAt = Date.now();
+    for (; ;) {
+        const fresh = Array.from(editor.getCurrentPageShapeIds()).filter(
+            (id) => !beforeIds.has(id)
+        );
+        if (fresh.length > 0) {
+            return fresh;
+        }
+        if (Date.now() - startedAt >= timeoutMs || editor.isDisposed) {
+            return [];
+        }
+        await wait(50);
+    }
+}
+
 async function getBearerTokenForApi() {
     const auth = getFirebaseAuth();
     const currentUser = auth?.currentUser;
@@ -83,55 +198,49 @@ export default function DesignerCanvas() {
     const [generationError, setGenerationError] = useState<string | null>(null);
     const [elapsedSeconds, setElapsedSeconds] = useState(0);
     const [isDemoMode, setIsDemoMode] = useState(USE_MOCK_GENERATION);
-    const [pendingSketchBlob, setPendingSketchBlob] = useState<Blob | null>(null);
+    const [pendingGeneration, setPendingGeneration] = useState<GenerationPayload | null>(null);
     const [canvasToast, setCanvasToast] = useState<string | null>(null);
     const [importToast, setImportToast] = useState<string | null>(null);
+    const [draftSaveToast, setDraftSaveToast] = useState<string | null>(null);
     const [storageQuotaError, setStorageQuotaError] = useState(false);
+    const [generateConfirmOpen, setGenerateConfirmOpen] = useState(false);
+    const [generateConfirmPreviewUrl, setGenerateConfirmPreviewUrl] = useState<string | null>(null);
+    const [generateConfirmShowDefaultColor, setGenerateConfirmShowDefaultColor] = useState(false);
+    const [generateConfirmDetectedGarment, setGenerateConfirmDetectedGarment] =
+        useState<ActiveTemplateGarment | null>(null);
     const router = useRouter();
-    const draftRecoveredRef = useRef(false);
+    const draftRecoveredEditorRef = useRef<Editor | null>(null);
+    const cameraCleanupRef = useRef<(() => void) | null>(null);
+    const generateConfirmPendingRef = useRef<GenerationPayload | null>(null);
+    const {
+        registerEditor,
+        setGenerateActive,
+        status: draftSaveStatus,
+        saveErrorMessage,
+        clearSaveError,
+        saveDraft,
+    } = useDesignerDraft();
 
-    const draftsEnabled = isFirebaseConfigured() && !!user;
-    const { status: draftStatus, lastSavedAt, saveNow } = useDraftAutosave(editor, {
-        enabled: draftsEnabled,
-        user: user ?? null,
-    });
+    useEffect(() => {
+        registerEditor(editor);
+        return () => registerEditor(null);
+    }, [editor, registerEditor]);
 
-    const handleSaveDraft = useCallback(async () => {
-        if (!draftsEnabled) {
-            setCanvasToast('Sign in to save drafts.');
-            return;
-        }
-        const result = await saveNow();
-        if (!result.ok) {
-            if (result.reason === 'empty') {
-                setCanvasToast('Draw something on the canvas first.');
-            } else if (result.reason === 'disabled') {
-                setCanvasToast('Sign in to save drafts.');
-            } else {
-                setCanvasToast('Could not save draft. Check your connection and backend.');
-            }
-            return;
-        }
-        if (result.draft_id != null && user) {
-            try {
-                const token = await user.getIdToken();
-                const arch = await fetch('/api/realize/drafts/archive', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        Authorization: `Bearer ${token}`,
-                    },
-                    body: JSON.stringify({ draft_id: result.draft_id }),
-                });
-                if (!arch.ok) {
-                    console.warn('Mark draft saved failed:', await arch.text());
-                }
-            } catch (e) {
-                console.warn('Mark draft saved failed:', e);
-            }
-        }
-        setCanvasToast('Draft saved to My work.');
-    }, [draftsEnabled, saveNow, user]);
+    useEffect(() => {
+        if (!editor) return;
+        cameraCleanupRef.current?.();
+        cameraCleanupRef.current = setupDesignerCamera(editor);
+        return () => {
+            cameraCleanupRef.current?.();
+            cameraCleanupRef.current = null;
+        };
+    }, [editor]);
+
+    useEmptyCanvasZoomReset(editor);
+
+    useEffect(() => {
+        setGenerateActive(isGenerating);
+    }, [isGenerating, setGenerateActive]);
 
     const notifyEmptyCanvas = useCallback(() => {
         setCanvasToast(EMPTY_CANVAS_TOAST_MESSAGE);
@@ -141,9 +250,13 @@ export default function DesignerCanvas() {
         setImportToast(message);
     }, []);
 
+    const notifyCanvasMessage = useCallback((message: string) => {
+        setCanvasToast(message);
+    }, []);
+
     const generateFlowValue = useMemo(
-        () => ({ isGenerating, notifyEmptyCanvas, notifyImportRejected }),
-        [isGenerating, notifyEmptyCanvas, notifyImportRejected]
+        () => ({ isGenerating, notifyEmptyCanvas, notifyImportRejected, notifyCanvasMessage }),
+        [isGenerating, notifyEmptyCanvas, notifyImportRejected, notifyCanvasMessage]
     );
 
     useEffect(() => {
@@ -175,6 +288,21 @@ export default function DesignerCanvas() {
         const id = window.setTimeout(() => setImportToast(null), 5000);
         return () => window.clearTimeout(id);
     }, [importToast]);
+
+    useEffect(() => {
+        if (draftSaveStatus === 'error' && saveErrorMessage) {
+            setDraftSaveToast(saveErrorMessage);
+        }
+    }, [draftSaveStatus, saveErrorMessage]);
+
+    useEffect(() => {
+        if (!draftSaveToast) return;
+        const id = window.setTimeout(() => {
+            setDraftSaveToast(null);
+            clearSaveError();
+        }, 8000);
+        return () => window.clearTimeout(id);
+    }, [draftSaveToast, clearSaveError]);
 
     /** With `hideUi`, tldraw does not mount clipboard handlers; guard image paste the same as drop/import. */
     useEffect(() => {
@@ -213,11 +341,10 @@ export default function DesignerCanvas() {
                 }
             }
 
-            const point = editor.getViewportPageBounds().center;
             await editor.putExternalContent({
                 type: 'files',
                 files: imageFiles,
-                point,
+                point: getImagePlacementPoint(editor),
             });
         };
 
@@ -225,9 +352,100 @@ export default function DesignerCanvas() {
         return () => doc.removeEventListener('paste', onPaste, { capture: true });
     }, [editor, notifyImportRejected]);
 
-    /** Recover sketch from history handoff or latest server draft (once per mount). */
+    /**
+     * Canvas bootstrap, once per editor instance, in strict order:
+     * 1. A pending template from the Templates page WINS — fresh canvas, draft recovery skipped
+     *    entirely (Option C: the old draft is replaced by the next autosave).
+     * 2. Otherwise recover the sketch from a history handoff or the latest server draft.
+     */
     useEffect(() => {
-        if (!editor || !isFirebaseConfigured() || draftRecoveredRef.current) {
+        if (!editor || draftRecoveredEditorRef.current === editor) {
+            return;
+        }
+
+        const pendingTemplate = readPendingTemplate();
+
+        if (pendingTemplate) {
+            draftRecoveredEditorRef.current = editor;
+            // Template wins: drop any stale history handoff so it can't restore on a later visit.
+            sessionStorage.removeItem(RECOVER_SKETCH_STORAGE_KEY);
+
+            const { src, name, id, garmentLabel, generationCategoryId } = pendingTemplate;
+            void (async () => {
+                try {
+                    const response = await fetch(src);
+                    if (!response.ok) {
+                        throw new Error(`Template fetch failed (${response.status})`);
+                    }
+                    const blob = await response.blob();
+                    const file = new File([blob], `${name}.png`, {
+                        type: blob.type || 'image/png',
+                    });
+
+                    // Fresh canvas at 100% zoom, then place the template at the viewport center.
+                    clearAllCanvasShapes(editor);
+
+                    const beforeIds = new Set<TLShapeId>(editor.getCurrentPageShapeIds());
+                    await editor.putExternalContent({
+                        type: 'files',
+                        files: [file],
+                        point: getImagePlacementPoint(editor),
+                    });
+
+                    const templateIds = await waitForNewShapeIds(editor, beforeIds);
+                    if (templateIds.length === 0) {
+                        throw new Error('Template shape was not created');
+                    }
+
+                    // Lock + tag so "New sketch" and the Remove template button can find it reliably.
+                    // History-ignored so a single Ctrl+Z removes the template itself.
+                    editor.run(
+                        () => {
+                            editor.updateShapes(
+                                templateIds.map((shapeId) => {
+                                    const shape = editor.getShape(shapeId);
+                                    return {
+                                        id: shapeId,
+                                        type: shape?.type ?? 'image',
+                                        isLocked: true,
+                                        meta: {
+                                            ...shape?.meta,
+                                            isTemplate: true,
+                                            templateId: id,
+                                            templateName: name,
+                                            garmentLabel,
+                                            generationCategoryId,
+                                        },
+                                    };
+                                })
+                            );
+                        },
+                        { history: 'ignore' }
+                    );
+
+                    sessionStorage.removeItem(PENDING_TEMPLATE_STORAGE_KEY);
+                    setCanvasToast(
+                        `"${name}" added template. Use as it is or draw over it in Outline mode.`
+                    );
+                } catch (err) {
+                    console.error('Failed to place template on canvas:', err);
+                    if (editor.isDisposed) {
+                        // Editor remounted mid-flight (e.g. React StrictMode): keep the
+                        // sessionStorage key so the next editor instance retries placement.
+                        if (draftRecoveredEditorRef.current === editor) {
+                            draftRecoveredEditorRef.current = null;
+                        }
+                        return;
+                    }
+                    sessionStorage.removeItem(PENDING_TEMPLATE_STORAGE_KEY);
+                    setCanvasToast(TEMPLATE_LOAD_ERROR_MESSAGE);
+                }
+            })();
+            return;
+        }
+
+        // --- No pending template: recover sketch from history handoff or latest server draft. ---
+        if (!isFirebaseConfigured()) {
             return;
         }
 
@@ -235,9 +453,9 @@ export default function DesignerCanvas() {
         if (recoverRaw) {
             try {
                 const sketch = JSON.parse(recoverRaw) as TLStoreSnapshot;
-                loadEditorSnapshot(editor, sketch);
+                restoreEditorSnapshot(editor, sketch);
                 sessionStorage.removeItem(RECOVER_SKETCH_STORAGE_KEY);
-                draftRecoveredRef.current = true;
+                draftRecoveredEditorRef.current = editor;
                 return;
             } catch {
                 sessionStorage.removeItem(RECOVER_SKETCH_STORAGE_KEY);
@@ -261,14 +479,14 @@ export default function DesignerCanvas() {
                 const j = (await r.json()) as { draft?: { sketch_json?: unknown } };
                 const sketch = j.draft?.sketch_json;
                 if (!sketch || typeof sketch !== 'object' || cancelled) {
-                    draftRecoveredRef.current = true;
+                    draftRecoveredEditorRef.current = editor;
                     return;
                 }
-                loadEditorSnapshot(editor, sketch as TLStoreSnapshot);
-                draftRecoveredRef.current = true;
+                restoreEditorSnapshot(editor, sketch as TLStoreSnapshot);
+                draftRecoveredEditorRef.current = editor;
             } catch (e) {
                 console.error('Draft recovery failed:', e);
-                draftRecoveredRef.current = true;
+                draftRecoveredEditorRef.current = editor;
             }
         })();
 
@@ -291,18 +509,22 @@ export default function DesignerCanvas() {
         };
     };
 
-    const startGeneration = async (blob: Blob) => {
+    const startGeneration = async (payload: GenerationPayload) => {
+        const { sketchBlob, colorHintsBlob, previewBlob } = payload;
+        const generationCategoryId =
+            payload.generationCategoryId ?? DEFAULT_GENERATION_CATEGORY_ID;
+        const garmentLabel = payload.garmentLabel ?? DEFAULT_GARMENT_LABEL;
         setIsSynthesisPreviewOpen(true);
         setGenerationError(null);
         setStorageQuotaError(false);
         setElapsedSeconds(0);
         setIsGenerating(true);
-        setPendingSketchBlob(blob);
+        setPendingGeneration(payload);
 
         let shouldStopGenerating = true;
 
         try {
-            const sketchImage = await blobToBase64(blob);
+            const sketchImage = await blobToBase64(previewBlob);
             const startedAt = Date.now();
             let data: GenerateResponse;
 
@@ -312,16 +534,24 @@ export default function DesignerCanvas() {
             } else {
                 const idToken = await getBearerTokenForApi();
                 const formData = new FormData();
-                formData.append('file', blob, 'canvas.png');
+                formData.append('file', sketchBlob, 'sketch.png');
+                formData.append('sketch', sketchBlob, 'sketch.png');           
+                formData.append('color_hints', colorHintsBlob, 'color_hints.png'); 
+                formData.append('preview_file', previewBlob, 'preview.png');
+                formData.append('generation_category_id', generationCategoryId);
+                formData.append('garment_label', garmentLabel);
                 if (editor) {
                     formData.append('sketch_json', JSON.stringify(getEditorSnapshot(editor)));
                 }
 
-                const response = await fetch('/api/generate', {
+                const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL;
+                const endpoint = backendUrl
+                    ? `${backendUrl}/generate-image`
+                    : '/api/generate';
+
+                const response = await fetch(endpoint, {
                     method: 'POST',
-                    headers: {
-                        Authorization: `Bearer ${idToken}`,
-                    },
+                    ...(backendUrl ? {} : { headers: { Authorization: `Bearer ${idToken}` } }),
                     body: formData,
                 });
 
@@ -400,141 +630,191 @@ export default function DesignerCanvas() {
         }
     };
 
+    const closeGenerateConfirm = useCallback(() => {
+        setGenerateConfirmOpen(false);
+        setGenerateConfirmShowDefaultColor(false);
+        setGenerateConfirmDetectedGarment(null);
+        setGenerateConfirmPreviewUrl((prev) => {
+            if (prev) {
+                URL.revokeObjectURL(prev);
+            }
+            return null;
+        });
+        generateConfirmPendingRef.current = null;
+    }, []);
+
+    const handleGenerateConfirmContinue = useCallback(
+        async (category: GenerateCategorySelection) => {
+            const pending = generateConfirmPendingRef.current;
+            if (!pending) {
+                return;
+            }
+            generateConfirmPendingRef.current = null;
+            setGenerateConfirmOpen(false);
+            setGenerateConfirmShowDefaultColor(false);
+            setGenerateConfirmDetectedGarment(null);
+            setGenerateConfirmPreviewUrl((prev) => {
+                if (prev) {
+                    URL.revokeObjectURL(prev);
+                }
+                return null;
+            });
+            maybeDownloadPipelinePngsForDebug(pending.sketchBlob, pending.colorHintsBlob);
+            await startGeneration({
+                ...pending,
+                generationCategoryId: category.generationCategoryId,
+                garmentLabel: category.garmentLabel,
+            });
+        },
+        []
+    );
+
     const handleGenerate = async () => {
         if (!editor || isGenerating) return;
 
-        const blob = await exportCanvasToBlob(editor);
-
-        if (!blob) {
+        const shapeCount = editor.getCurrentPageShapeIds().size;
+        if (shapeCount === 0) {
             setCanvasToast(EMPTY_CANVAS_TOAST_MESSAGE);
             return;
         }
 
-        await startGeneration(blob);
+        if (!hasOutlineShapes(editor)) {
+            setCanvasToast(NO_OUTLINE_TOAST_MESSAGE);
+            return;
+        }
+
+        const sketchBlob = await exportSketchPngBlob(editor);
+        if (!sketchBlob) {
+            setCanvasToast(NO_OUTLINE_TOAST_MESSAGE);
+            return;
+        }
+
+        const colorHintsBlob = await exportColorHintsPngBlob(editor);
+        if (!colorHintsBlob) {
+            setCanvasToast(EMPTY_CANVAS_TOAST_MESSAGE);
+            return;
+        }
+
+        const hasColorHints = hasColorHintShapes(editor);
+        if (!hasColorHints && !user) {
+            setCanvasToast(NO_COLOR_HINTS_TOAST_MESSAGE);
+        }
+
+        const previewBlob = (await exportCombinedSketchPreviewBlob(editor)) ?? sketchBlob;
+
+        const payload: GenerationPayload = {
+            sketchBlob,
+            colorHintsBlob,
+            previewBlob,
+        };
+
+        if (user) {
+            generateConfirmPendingRef.current = payload;
+            setGenerateConfirmDetectedGarment(getActiveTemplateGarment(editor));
+            setGenerateConfirmShowDefaultColor(!hasColorHints);
+            setGenerateConfirmPreviewUrl(URL.createObjectURL(previewBlob));
+            setGenerateConfirmOpen(true);
+            return;
+        }
+
+        maybeDownloadPipelinePngsForDebug(sketchBlob, colorHintsBlob);
+        await startGeneration(payload);
     };
 
     return (
-        <GenerateFlowProvider value={generateFlowValue}>
-            <div className="relative h-full w-full bg-white">
-                {canvasToast && (
-                    <div role="alert" className={`${TOAST_OUTER_CLASS} bottom-24`}>
-                        <div className="flex items-start justify-between gap-3">
-                            <p className="text-sm leading-snug text-gray-700">{canvasToast}</p>
-                            <button
-                                type="button"
-                                onClick={() => setCanvasToast(null)}
-                                className="shrink-0 text-xs font-medium text-purple-600 transition-colors hover:text-purple-800"
-                                aria-label="Dismiss notification"
-                            >
-                                Dismiss
-                            </button>
+        <DrawingModeProvider>
+            <GenerateFlowProvider value={generateFlowValue}>
+                <div className="relative h-full w-full bg-white">
+                    <DesignerToastStack
+                        canvasToast={canvasToast}
+                        onDismissCanvasToast={() => setCanvasToast(null)}
+                        importToast={importToast}
+                        onDismissImportToast={() => setImportToast(null)}
+                        draftSaveToast={draftSaveToast}
+                        onRetryDraftSave={() => void saveDraft()}
+                        onDismissDraftSaveToast={() => {
+                            setDraftSaveToast(null);
+                            clearSaveError();
+                        }}
+                    />
+                    {showCanvasGuide && (
+                        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10001 pointer-events-auto">
+                            <div className="rounded-xl border border-purple-200 bg-white/95 px-4 py-3 shadow-lg backdrop-blur-sm">
+                                <p className="text-xs font-semibold text-gray-800">Quick tip</p>
+                                <p className="mt-1 text-xs text-gray-600">
+                                    Use Outline mode for structure (black/grey), then Color hints for regions. Pinch or scroll on the canvas to zoom — Generate always exports your entire sketch.
+                                </p>
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        sessionStorage.setItem('realizeme:canvasGuideDismissed', '1');
+                                        setShowCanvasGuide(false);
+                                    }}
+                                    className="mt-2 text-xs font-medium text-purple-600 hover:text-purple-700"
+                                >
+                                    Dismiss
+                                </button>
+                            </div>
                         </div>
-                    </div>
-                )}
-                {importToast && (
-                    <div role="alert" className={`${TOAST_OUTER_CLASS} bottom-40`}>
-                        <div className="flex items-start justify-between gap-3">
-                            <p className="text-sm leading-snug text-gray-700">{importToast}</p>
-                            <button
-                                type="button"
-                                onClick={() => setImportToast(null)}
-                                className="shrink-0 text-xs font-medium text-purple-600 transition-colors hover:text-purple-800"
-                                aria-label="Dismiss import notification"
-                            >
-                                Dismiss
-                            </button>
-                        </div>
-                    </div>
-                )}
-                {showCanvasGuide && (
-                    <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10001 pointer-events-auto">
-                        <div className="rounded-xl border border-purple-200 bg-white/95 px-4 py-3 shadow-lg backdrop-blur-sm">
-                            <p className="text-xs font-semibold text-gray-800">Quick tip</p>
-                            <p className="mt-1 text-xs text-gray-600">Use the top-left controls for Import/Export, and the right panel for color, size, stroke, and opacity.</p>
-                            <button
-                                type="button"
-                                onClick={() => {
-                                    sessionStorage.setItem('realizeme:canvasGuideDismissed', '1');
-                                    setShowCanvasGuide(false);
-                                }}
-                                className="mt-2 text-xs font-medium text-purple-600 hover:text-purple-700"
-                            >
-                                Dismiss
-                            </button>
-                        </div>
-                    </div>
-                )}
+                    )}
 
-                <SynthesisPreviewModal
-                    open={isSynthesisPreviewOpen}
-                    isGenerating={isGenerating}
-                    elapsedSeconds={elapsedSeconds}
-                    stepLabel={currentStep}
-                    isDemoMode={isDemoMode}
-                    errorMessage={generationError}
-                    errorIsDestructive={storageQuotaError}
-                    onRetry={() => {
-                        if (!pendingSketchBlob || isGenerating) return;
-                        setStorageQuotaError(false);
-                        void startGeneration(pendingSketchBlob);
-                    }}
-                    onCloseError={() => {
-                        if (isGenerating) return;
-                        setIsSynthesisPreviewOpen(false);
-                        setGenerationError(null);
-                        setStorageQuotaError(false);
-                    }}
-                />
+                    <GenerateConfirmModal
+                        open={generateConfirmOpen}
+                        previewUrl={generateConfirmPreviewUrl}
+                        showDefaultColorNote={generateConfirmShowDefaultColor}
+                        detectedGarment={generateConfirmDetectedGarment}
+                        onBack={closeGenerateConfirm}
+                        onContinue={(category) => {
+                            void handleGenerateConfirmContinue(category);
+                        }}
+                    />
 
-                <Tldraw
-                    onMount={(mountedEditor) => {
-                        setEditor(mountedEditor);
-                        patchDesignerImageImportLimits(mountedEditor, notifyImportRejected);
-                    }}
-                    hideUi
-                    inferDarkMode={false}
-                >
-                    <CustomToolbar />
-                    <CustomStylePanel />
-                    <CanvasFileMenu />
-                </Tldraw>
+                    <SynthesisPreviewModal
+                        open={isSynthesisPreviewOpen}
+                        isGenerating={isGenerating}
+                        elapsedSeconds={elapsedSeconds}
+                        stepLabel={currentStep}
+                        isDemoMode={isDemoMode}
+                        errorMessage={generationError}
+                        errorIsDestructive={storageQuotaError}
+                        onRetry={() => {
+                            if (!pendingGeneration || isGenerating) return;
+                            setStorageQuotaError(false);
+                            void startGeneration(pendingGeneration);
+                        }}
+                        onCloseError={() => {
+                            if (isGenerating) return;
+                            setIsSynthesisPreviewOpen(false);
+                            setGenerationError(null);
+                            setStorageQuotaError(false);
+                        }}
+                    />
 
-                {draftsEnabled ? (
-                    <div className="absolute bottom-3 left-1/2 z-10040 flex w-[min(calc(100vw-2rem),28rem)] -translate-x-1/2 flex-col items-stretch gap-2 sm:w-auto sm:min-w-[20rem] sm:flex-row sm:items-center sm:gap-3">
-                        <div
-                            className="rounded-lg border border-violet-200/80 bg-white/95 px-3 py-2 text-center text-xs text-slate-600 shadow-sm backdrop-blur-sm sm:text-left"
-                            aria-live="polite"
-                        >
-                            {draftStatus === 'saving'
-                                ? 'Saving draft…'
-                                : draftStatus === 'error'
-                                  ? 'Draft save failed (check backend / DB).'
-                                  : lastSavedAt
-                                    ? `Last saved ${lastSavedAt.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} · auto-save every 1 min`
-                                    : 'Draft auto-saves every minute while you draw.'}
-                        </div>
-                        <button
-                            type="button"
-                            onClick={() => void handleSaveDraft()}
-                            disabled={draftStatus === 'saving' || isGenerating}
-                            className="inline-flex items-center justify-center gap-2 rounded-lg border border-violet-300 bg-realize-gradient-fuchsia px-4 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-violet-500/15 transition-opacity hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                            <Save className="h-4 w-4 shrink-0" aria-hidden />
-                            Save draft
-                        </button>
-                    </div>
-                ) : null}
+                    <Tldraw
+                        onMount={(mountedEditor) => {
+                            setEditor(mountedEditor);
+                            patchDesignerImageImportLimits(mountedEditor, notifyImportRejected);
+                        }}
+                        hideUi
+                        inferDarkMode={false}
+                    >
+                        <DesignerKeyboardShortcuts />
+                        <CustomToolbar />
+                        <CustomStylePanel />
+                        <CanvasFileMenu />
+                    </Tldraw>
 
-                <button
-                    id="realize-btn"
-                    type="button"
-                    onClick={handleGenerate}
-                    disabled={isGenerating}
-                    className="hidden"
-                >
-                    Generate
-                </button>
-            </div>
-        </GenerateFlowProvider>
+                    <button
+                        id="realize-btn"
+                        type="button"
+                        onClick={handleGenerate}
+                        disabled={isGenerating}
+                        className="hidden"
+                    >
+                        Generate
+                    </button>
+                </div>
+            </GenerateFlowProvider>
+        </DrawingModeProvider>
     );
 }

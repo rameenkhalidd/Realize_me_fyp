@@ -1,18 +1,23 @@
 """
 app.py
 ======
-Realize Me – AI Fashion System  
+Realize Me – AI Fashion System  (ControlNet Edition)
 
-All endpoints accept a SINGLE image file — the tldraw canvas export that
-contains BOTH the sketch lines AND colour-hint strokes painted by the user.
-No separate colour channel or JSON strokes needed.
+All generation endpoints accept TWO image files:
+  sketch       – outline drawing exported from tldraw (outline mode)
+  color_hints  – colour-hint strokes from tldraw (colour mode),
+                 spatially aligned with the sketch
+
+The two images appear as a single layered canvas to the user but are kept
+separate server-side so the ControlNet + SAM + img2img pipeline can use
+each signal in the optimal way.
 
 Endpoints
 ---------
 GET  /health              Health check
-POST /generate-image      tldraw canvas → generated clothing image (base64)
-POST /find-similar        Clothing image → top-5 similar products
-POST /full-pipeline       tldraw canvas → generated image + similar products
+POST /generate-image      sketch + color_hints → generated clothing image (base64)
+POST /find-similar        Clothing image → top-N similar products
+POST /full-pipeline       sketch + color_hints → generated image + similar products
 POST /confirm-and-search  Alias for /find-similar  (backward compat)
 """
 
@@ -23,17 +28,15 @@ import io
 import os
 from dotenv import load_dotenv
 
-# Load environment variables from .env
-load_dotenv()
-
+load_dotenv(override=True)
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from PIL import Image
 
-from similarity_search_fashion_clip    import find_similar_products
-from image_generation_local import generate_image_pix2pix
+from similarity_search_fashion_clip import find_similar_products
+from image_generation_controlnet import generate_image_controlnet
 from session_routes import router as session_router
 
 SIMILAR_TOP_K_DEFAULT = int(os.environ.get("SIMILAR_TOP_K", "5"))
@@ -45,11 +48,13 @@ SIMILAR_TOP_K_DEFAULT = int(os.environ.get("SIMILAR_TOP_K", "5"))
 app = FastAPI(
     title="Realize Me – AI Fashion System",
     description=(
-        "tldraw canvas (sketch + colour hints) "
-        "→ Pix2pix image generation "
+        "tldraw sketch (outline) + colour hints "
+        "→ ControlNet image generation "
+        "→ SAM + LAB colour blending "
+        "→ img2img realism pass "
         "→ CLIP similarity search"
     ),
-    version="2.0.0",
+    version="3.0.0",
 )
 
 app.add_middleware(
@@ -68,13 +73,13 @@ app.include_router(session_router)
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _read_pil(upload: UploadFile) -> Image.Image:
-    """Read an UploadFile into a PIL Image."""
+    """Read an UploadFile into a PIL Image (sync)."""
     raw = upload.file.read()
     return Image.open(io.BytesIO(raw))
 
 
 async def _read_pil_async(upload: UploadFile) -> Image.Image:
-    """Read upload bytes without blocking the event loop (Starlette async read)."""
+    """Read an UploadFile into a PIL Image (async)."""
     raw = await upload.read()
     return Image.open(io.BytesIO(raw))
 
@@ -93,11 +98,12 @@ def _pil_to_b64(img: Image.Image) -> str:
 @app.on_event("startup")
 async def startup_event():
     print("\n" + "=" * 70)
-    print("🚀  Realize Me – AI Fashion System  (Pix2pix)".center(70))
+    print("🚀  Realize Me – AI Fashion System  (ControlNet)".center(70))
     print("=" * 70)
     print("✓  Server running")
-    print("✓  Pix2pix model will load on first /generate-image request")
-    print("✓  CLIP model will load on first /find-similar request")
+    print("✓  ControlNet model loads on first /generate-image request")
+    print("✓  SAM model loads on first /generate-image request")
+    print("✓  CLIP model loads on first /find-similar request")
     print("=" * 70 + "\n")
 
 
@@ -110,49 +116,65 @@ async def health_check():
     return {
         "status": "ok",
         "message": "Realize Me backend is running",
-        "version": "2.0.0",
+        "version": "3.0.0",
     }
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# ENDPOINT 1 – Generate image from tldraw canvas
+# ENDPOINT 1 – Generate image from sketch + colour hints
 # ──────────────────────────────────────────────────────────────────────────────
 
 @app.post("/generate-image")
 async def generate_image(
-    file: UploadFile = File(
+    sketch: UploadFile = File(
         ...,
         description=(
-            "PNG/JPG exported from tldraw. "
-            "Must contain the sketch lines AND any colour-hint strokes "
-            "the user has painted on the same canvas."
+            "PNG/JPG outline sketch exported from tldraw (outline mode). "
+            "Black/grey lines on white background, 512×512 recommended."
         ),
-    )
+    ),
+    color_hints: UploadFile = File(
+        ...,
+        description=(
+            "PNG/JPG colour-hint strokes from tldraw (colour mode). "
+            "Must be spatially aligned with sketch, same canvas dimensions. "
+            "RGBA (transparent background) is handled automatically."
+        ),
+    ),
+    seed: int = Query(-1, description="RNG seed for reproducibility. -1 = random."),
 ):
     """
-    Convert a tldraw canvas image into a realistic clothing image.
+    Convert a tldraw outline sketch + colour hints into a realistic clothing image.
 
-    The backend automatically separates:
-      - The greyscale sketch (all lines regardless of colour)
-      - The colour hints    (only pixels with noticeable saturation)
-
-    Both are fed as a 4-channel input to the Scribbler Generator.
+    Pipeline:
+      1. Sketch      → ControlNet (finetuned) → structured white/grey garment
+      2. Color hints → SAM segmentation → RGB blend + LAB blend with ControlNet output
+      3. LAB-blended image → ControlNet img2img (strength=0.50) → final realistic image
     """
     try:
-        print(f"\n📎 /generate-image  ←  {file.filename}")
+        print(f"\n📎 /generate-image  ←  sketch={sketch.filename}  hints={color_hints.filename}")
 
-        canvas = _read_pil(file)
-        print(f"   Canvas size  : {canvas.size}  mode: {canvas.mode}")
+        sketch_img      = _read_pil(sketch)
+        color_hints_img = _read_pil(color_hints)
 
-        generated = generate_image_pix2pix(canvas)
-        print(f"   Output size  : {generated.size}")
+        print(f"   Sketch size   : {sketch_img.size}  mode: {sketch_img.mode}")
+        print(f"   Hints size    : {color_hints_img.size}  mode: {color_hints_img.mode}")
+
+        effective_seed = None if seed < 0 else seed
+
+        generated = generate_image_controlnet(
+            sketch=sketch_img,
+            color_hints=color_hints_img,
+            seed=effective_seed,
+        )
+        print(f"   Output size   : {generated.size}")
 
         return {
-            "success":     True,
-            "message":     "Image generated successfully",
+            "success":      True,
+            "message":      "Image generated successfully",
             "image_base64": _pil_to_b64(generated),
-            "framework":   "PyTorch Scribbler",
-            "image_size":  f"{generated.size[0]}x{generated.size[1]}",
+            "framework":    "ControlNet + SAM + img2img",
+            "image_size":   f"{generated.size[0]}x{generated.size[1]}",
         }
 
     except Exception as exc:
@@ -165,19 +187,19 @@ async def generate_image(
 # ──────────────────────────────────────────────────────────────────────────────
 
 async def _run_find_similar_core(file: UploadFile, top_k: int) -> dict:
-    """FashionCLIP embedding + pgvector top-k retrieval (shared by /find-similar and aliases)."""
+    """FashionCLIP embedding + pgvector top-k retrieval."""
     print(f"\n🔍 /find-similar  ←  {file.filename}  (top_k={top_k})")
 
-    image = (await _read_pil_async(file)).convert("RGB")
+    image   = (await _read_pil_async(file)).convert("RGB")
     results = find_similar_products(image, top_k=top_k)
 
     print(f"✓ Found {len(results)} products")
 
     return {
-        "success": True,
-        "message": f"Found {len(results)} similar products",
-        "count": len(results),
-        "products": results,
+        "success":   True,
+        "message":   f"Found {len(results)} similar products",
+        "count":     len(results),
+        "products":  results,
         "framework": "FashionCLIP + pgvector",
     }
 
@@ -192,12 +214,12 @@ async def find_similar(
         SIMILAR_TOP_K_DEFAULT,
         ge=1,
         le=50,
-        description="Number of nearest neighbours to return (FashionCLIP + pgvector).",
+        description="Number of nearest neighbours to return.",
     ),
 ):
     """
-    Find the top-k visually similar products for a given clothing image.
-    Uses FashionCLIP embeddings + pgvector cosine distance on product_embeddings_fashion_clip.
+    Find top-k visually similar products for a given clothing image.
+    Uses FashionCLIP embeddings + pgvector cosine distance.
     """
     try:
         return await _run_find_similar_core(file, top_k)
@@ -212,33 +234,44 @@ async def find_similar(
 
 @app.post("/full-pipeline")
 async def full_pipeline(
-    file: UploadFile = File(
+    sketch: UploadFile = File(
+        ...,
+        description="Outline sketch from tldraw (outline mode).",
+    ),
+    color_hints: UploadFile = File(
         ...,
         description=(
-            "tldraw canvas export (sketch + colour hints). "
-            "The full pipeline generates the clothing image then searches "
-            "for similar products automatically."
+            "Colour-hint strokes from tldraw (colour mode), spatially aligned with sketch. "
+            "RGBA (transparent background) is handled automatically."
         ),
-    )
+    ),
+    seed: int = Query(-1, description="RNG seed. -1 = random."),
 ):
     """
     End-to-end pipeline:
-      tldraw canvas → Scribbler image → CLIP similarity search → products
+      sketch + colour hints → ControlNet + SAM + img2img → CLIP similarity search → products
     """
     try:
         print("\n" + "=" * 70)
         print("🎨  FULL PIPELINE".center(70))
         print("=" * 70)
 
-        # Read canvas once (UploadFile stream can only be read once)
-        raw    = await file.read()
-        canvas = Image.open(io.BytesIO(raw))
-        print(f"\n📎 Canvas: {file.filename}  size={canvas.size}  mode={canvas.mode}")
+        sketch_img      = Image.open(io.BytesIO(await sketch.read()))
+        color_hints_img = Image.open(io.BytesIO(await color_hints.read()))
+
+        print(f"\n📎 Sketch : {sketch.filename}  size={sketch_img.size}  mode={sketch_img.mode}")
+        print(f"📎 Hints  : {color_hints.filename}  size={color_hints_img.size}  mode={color_hints_img.mode}")
+
+        effective_seed = None if seed < 0 else seed
 
         # Step 1 – generate
-        print("\n── Step 1: Scribbler generation ────────────────────────────────")
-        generated = generate_image_scribbler(canvas)
-        img_b64   = _pil_to_b64(generated)
+        print("\n── Step 1: ControlNet + SAM + img2img ──────────────────────────")
+        generated = generate_image_controlnet(
+            sketch=sketch_img,
+            color_hints=color_hints_img,
+            seed=effective_seed,
+        )
+        img_b64 = _pil_to_b64(generated)
         print(f"✓ Generated  {generated.size}")
 
         # Step 2 – similarity search
@@ -251,16 +284,17 @@ async def full_pipeline(
         print("=" * 70 + "\n")
 
         return {
-            "success":               True,
-            "message":               "Pipeline completed successfully",
+            "success":                True,
+            "message":                "Pipeline completed successfully",
             "generated_image_base64": img_b64,
-            "similar_products":      products,
-            "frameworks_used":       [
-                "PyTorch Scribbler",
-                "PyTorch CLIP",
-                "PostgreSQL pgvector",
+            "similar_products":       products,
+            "frameworks_used": [
+                "ControlNet (finetuned)",
+                "SAM (Meta AI)",
+                "Stable Diffusion ControlNet img2img",
+                "FashionCLIP + pgvector",
             ],
-            "total_products_found":  len(products),
+            "total_products_found": len(products),
         }
 
     except Exception as exc:
@@ -274,7 +308,7 @@ async def full_pipeline(
 
 @app.post("/confirm-and-search")
 async def confirm_and_search(file: UploadFile = File(...)):
-    """Alias for /find-similar."""
+    """Alias for /find-similar (single generated image → similar products)."""
     try:
         return await _run_find_similar_core(file, SIMILAR_TOP_K_DEFAULT)
     except Exception as exc:

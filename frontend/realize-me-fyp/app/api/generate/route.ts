@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyBearerIdTokenFromRequest } from '@/lib/firebase/admin';
+export const maxDuration = 1200; // 20 minutes in seconds (Vercel/Next.js limit)
+export const dynamic = 'force-dynamic';
 
 const BACKEND_BASE_URL = process.env.REALIZEME_BACKEND_URL?.replace(/\/$/, '');
 
@@ -9,9 +11,13 @@ function toDataUrl(bytes: ArrayBuffer, mimeType: string) {
 }
 
 type ParsedMultipart = {
-    file: File;
-    dataUrl: string;
+    sketchFile: File;
+    colorHintsFile: File | null;
+    previewFile: File | null;
+    previewDataUrl: string;
     sketch_json: string | null;
+    generationCategoryId: string | null;
+    garmentLabel: string | null;
 };
 
 type ParsedJson = {
@@ -19,25 +25,57 @@ type ParsedJson = {
     sketch_json: null;
 };
 
+function fileFromForm(formData: FormData, ...keys: string[]): File | null {
+    for (const key of keys) {
+        const value = formData.get(key);
+        if (value instanceof File && value.size > 0) {
+            return value;
+        }
+    }
+    return null;
+}
+
 async function parseSketchRequest(req: NextRequest): Promise<ParsedMultipart | ParsedJson | { error: string }> {
     const contentType = req.headers.get('content-type') || '';
 
     if (contentType.includes('multipart/form-data')) {
         const formData = await req.formData();
-        const file = formData.get('file');
         const sketchField = formData.get('sketch_json');
 
-        if (!(file instanceof File)) {
-            return { error: 'No file provided' } as const;
+        const sketchFile =
+            fileFromForm(formData, 'sketch_file', 'file') ??
+            (() => {
+                const legacy = formData.get('file');
+                return legacy instanceof File ? legacy : null;
+            })();
+
+        if (!sketchFile) {
+            return { error: 'No sketch file provided' } as const;
         }
 
-        const arrayBuffer = await file.arrayBuffer();
+        const colorHintsFile = fileFromForm(formData, 'color_hints_file');
+        const previewFile = fileFromForm(formData, 'preview_file');
+        const previewSource = previewFile ?? sketchFile;
+
         const sketch_json = typeof sketchField === 'string' ? sketchField : null;
+        const previewBuffer = await previewSource.arrayBuffer();
+        const generationCategoryField = formData.get('generation_category_id');
+        const garmentLabelField = formData.get('garment_label');
 
         return {
-            file,
-            dataUrl: toDataUrl(arrayBuffer, file.type || 'image/png'),
+            sketchFile,
+            colorHintsFile,
+            previewFile,
+            previewDataUrl: toDataUrl(previewBuffer, previewSource.type || 'image/png'),
             sketch_json,
+            generationCategoryId:
+                typeof generationCategoryField === 'string' && generationCategoryField.trim()
+                    ? generationCategoryField.trim()
+                    : null,
+            garmentLabel:
+                typeof garmentLabelField === 'string' && garmentLabelField.trim()
+                    ? garmentLabelField.trim()
+                    : null,
         };
     }
 
@@ -53,11 +91,32 @@ async function parseSketchRequest(req: NextRequest): Promise<ParsedMultipart | P
     };
 }
 
-async function proxySessionGenerate(file: File, sketchJson: string | null, authHeader: string) {
+async function proxySessionGenerate(
+    sketchFile: File,
+    colorHintsFile: File | null,
+    previewFile: File | null,
+    sketchJson: string | null,
+    authHeader: string,
+    generationCategoryId: string | null,
+    garmentLabel: string | null
+) {
     const backendForm = new FormData();
-    backendForm.append('file', file);
+    backendForm.append('file', sketchFile, sketchFile.name || 'sketch.png');
+    backendForm.append('sketch_file', sketchFile, sketchFile.name || 'sketch.png');
+    if (colorHintsFile) {
+        backendForm.append('color_hints_file', colorHintsFile, colorHintsFile.name || 'color_hints.png');
+    }
+    if (previewFile) {
+        backendForm.append('preview_file', previewFile, previewFile.name || 'preview.png');
+    }
     if (sketchJson) {
         backendForm.append('sketch_json', sketchJson);
+    }
+    if (generationCategoryId) {
+        backendForm.append('generation_category_id', generationCategoryId);
+    }
+    if (garmentLabel) {
+        backendForm.append('garment_label', garmentLabel);
     }
 
     return fetch(`${BACKEND_BASE_URL}/api/generate`, {
@@ -69,17 +128,38 @@ async function proxySessionGenerate(file: File, sketchJson: string | null, authH
     });
 }
 
-async function proxyGeneration(file: File) {
+/**
+ * Calls /generate-image directly with the correct field names:
+ *   "sketch"      — outline PNG (required)
+ *   "color_hints" — colour-hint PNG (required; falls back to sketch if absent)
+ *
+ * Also appends an optional seed query param for reproducibility.
+ */
+async function proxyGeneration(sketchFile: File, colorHintsFile: File | null, seed?: number) {
     const backendForm = new FormData();
-    backendForm.append('file', file);
 
-    const response = await fetch(`${BACKEND_BASE_URL}/generate-image`, {
+    // FastAPI expects the field named exactly "sketch"
+    backendForm.append('sketch', sketchFile, sketchFile.name || 'sketch.png');
+
+    // FastAPI expects the field named exactly "color_hints" (required)
+    // If the frontend didn't send a colour layer yet, fall back to the sketch
+    // so the backend still receives a valid (blank-hint) image rather than a 422.
+    const hintsFile = colorHintsFile ?? sketchFile;
+    backendForm.append('color_hints', hintsFile, hintsFile.name || 'color_hints.png');
+
+    const url = new URL(`${BACKEND_BASE_URL}/generate-image`);
+    if (seed !== undefined) {
+        url.searchParams.set('seed', String(seed));
+    }
+
+    const response = await fetch(url.toString(), {
         method: 'POST',
         body: backendForm,
     });
 
     if (!response.ok) {
-        throw new Error(`Backend error: ${response.status}`);
+        const detail = await response.text();
+        throw new Error(`Backend /generate-image error ${response.status}: ${detail}`);
     }
 
     return response.json();
@@ -142,13 +222,20 @@ export async function POST(req: NextRequest) {
         }
 
         const authHeader = req.headers.get('authorization') ?? '';
+        const previewDataUrl =
+            'previewDataUrl' in parsedRequest ? parsedRequest.previewDataUrl : parsedRequest.dataUrl;
 
-        if (BACKEND_BASE_URL && 'file' in parsedRequest && parsedRequest.file) {
+        if (BACKEND_BASE_URL && 'sketchFile' in parsedRequest && parsedRequest.sketchFile) {
+            // ── Primary path: session endpoint (/api/generate) ──────────────
             try {
                 const sessionRes = await proxySessionGenerate(
-                    parsedRequest.file,
+                    parsedRequest.sketchFile,
+                    parsedRequest.colorHintsFile,
+                    parsedRequest.previewFile,
                     parsedRequest.sketch_json,
-                    authHeader
+                    authHeader,
+                    parsedRequest.generationCategoryId,
+                    parsedRequest.garmentLabel
                 );
                 if (sessionRes.ok) {
                     const proxied = await sessionRes.json();
@@ -170,14 +257,24 @@ export async function POST(req: NextRequest) {
                     }
                 } else {
                     const errText = await sessionRes.text();
-                    console.warn('Session /api/generate failed, trying /generate-image:', sessionRes.status, errText);
+                    console.warn(
+                        'Session /api/generate failed, falling back to /generate-image:',
+                        sessionRes.status,
+                        errText
+                    );
                 }
             } catch (error) {
-                console.error('Session generate error, falling back:', error);
+                console.error('Session generate error, falling back to /generate-image:', error);
             }
 
+            // ── Fallback path: /generate-image (sketch + color_hints) ───────
             try {
-                const proxied = await proxyGeneration(parsedRequest.file);
+                const proxied = await proxyGeneration(
+                    parsedRequest.sketchFile,
+                    parsedRequest.colorHintsFile,
+                    // pass seed only if you expose it as a query param upstream;
+                    // leave undefined to get a random result each time
+                );
                 const b64 =
                     typeof proxied.image_base64 === 'string' ? proxied.image_base64 : undefined;
                 const generatedImage =
@@ -218,13 +315,14 @@ export async function POST(req: NextRequest) {
             }
         }
 
+        // ── Mock fallback ────────────────────────────────────────────────────
         await new Promise((resolve) => setTimeout(resolve, 500));
 
         return NextResponse.json({
-            generatedImage: parsedRequest.dataUrl,
+            generatedImage: previewDataUrl,
             success: true,
             message: BACKEND_BASE_URL
-                ? 'We couldn’t complete the render on our servers just now, so your original sketch appears in both panels. You can still compare layout and continue your workflow.'
+                ? 'We couldn\'t complete the full AI render on our servers just now. Your sketch (with color hints) is on the left; the right panel shows a temporary preview until ControlNet + color processing is connected.'
                 : 'Preview: your sketch is shown in both panels until the full render pipeline is connected.',
             mode: 'mock',
         });
